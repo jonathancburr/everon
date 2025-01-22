@@ -54,7 +54,7 @@ Thumbs.db
 *.env
 
 *.pdf
-
+*.csv
 *.docx
-
-*. xlsx
+*.rtf
+*.xlsx
