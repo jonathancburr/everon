@@ -1,0 +1,423 @@
+---
+title: Scorecard
+output: html_document
+params: 
+  sitename: "5625200827"
+  max.activity.date: '2024-08-13'
+  max.days: 45
+  nightat: "03:00"
+  minseglen.global.days: 7
+  max.periodic.cpts: 4
+  minseglen.periodic: 20
+  
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+### credentials
+config.folder <- 'connection_strings/'
+live <- "config_live.txt"
+live <- paste(config.folder, live, sep = '')
+#routinecon <- "config_routine.txt"
+#routinecon <- paste(config.folder, routinecon, sep = '')
+#credentials <- read.csv(paste0(config.folder,'credentials.txt'))
+
+### sources
+source('sncirc/R/PGcpt-general.R')
+source('sncirc/R/pg_data_gen.R')
+source('sncirc/R/SN-circ-general.R')
+source('PGCircRoutine.R')
+
+### functions
+DialPlots <- 
+  # generates x day dial plot 
+  function(data,days,tz,nightstart,nightend,daystart,sensor_names) 
+  { 
+
+    plot.data <-
+    messages |>
+  
+      dplyr::mutate(ts=as.POSIXct(datecreated,origin='1970-01-01',tz=tz)) |>
+      dplyr::mutate(date=as.Date(ts, tz=tz)) |>
+      dplyr::filter(dplyr::between(date,max(date)-(days-1),max(date))) 
+    
+    if(nrow(plot.data)>0){
+    
+    motion.colours <-
+      data.frame(breaks = c('Bathroom','Bedroom','Hallway','Kitchen','Lounge','Toilet','Living Room'),
+                 values = c('#88CCEE','#332288','#DDCC77','#117733','#CC6677','#888888','#CC6677'))
+      
+      
+    path.data <-
+      plot.data |>
+      dplyr::filter(icon == 'MOTN') |>
+      dplyr::mutate(ts=as.POSIXct(datecreated,origin='1970-01-01',tz=tz)) |>
+      dplyr::mutate(date=as.Date(ts, tz='Europe/London')) |>
+      dplyr::mutate(tsgmt=as.POSIXct(howzfunc::dechour(ts)*3600,origin='1970-01-01',tz='GMT')) |>
+      dplyr::arrange(ts) |>
+      dplyr::mutate(gap = as.integer(ts-dplyr::lag(ts))) |>
+      dplyr::mutate(period = ifelse(sensor_name == dplyr::lag(sensor_name) & gap < 600,0,ts)) |>
+      dplyr::mutate(period = ifelse(as.integer(difftime(date,dplyr::lag(date)))>0,ts,period)) |>
+      na.omit() |>
+      dplyr::mutate(period = cummax(period)) |>
+      dplyr::mutate(date=as.POSIXct(date)) |>
+      dplyr::filter(sensor_name %in% sensor_names) |>
+      dplyr::mutate(sensor_name= ifelse(sensor_name== 'Main Door','Main',sensor_name)) |>
+      dplyr::mutate(sensor_name= ifelse(sensor_name== 'Back Door','Back',sensor_name)) |>
+      dplyr::mutate(sensor_name= ifelse(sensor_name== 'Front Door','Front',sensor_name)) |>
+      dplyr::rename(Location=sensor_name) 
+        
+   
+    event.data <-
+      plot.data |>
+      dplyr::filter(icon != 'MOTN') |>
+      dplyr::filter(sensor_name %in% sensor_names) |>   
+      dplyr::mutate(bin=as.POSIXct(datecreated %/% 1800 * 1800 + 900)) |>
+      dplyr::select(bin,date,sensor_name) |>
+      dplyr::group_by(bin) |>
+      dplyr::mutate(sensor_name = ifelse(sensor_name == 'Fridge Door','Fridge',sensor_name)) |>
+      dplyr::mutate(label = paste(unique(sensor_name), collapse = ' ')) |>
+      dplyr::mutate(bingmt=as.POSIXct(howzfunc::dechour(bin)*3600,origin='1970-01-01',tz='GMT')) |>   
+      dplyr::group_by(bingmt,date,label) |>
+      dplyr::summarise() |>
+      dplyr::mutate(date=as.POSIXct(date))
+
+    xlims <- c(as.POSIXct(0,origin='1970-01-01',tz='GMT'),as.POSIXct(86400,origin='1970-01-01',tz=tz))
+    ylims <- c(max(plot.data$date)-(days+1),max(plot.data$date)) |> as.POSIXct()
+    dates <- data.frame(date=as.POSIXct(as.Date(unique(plot.data$date))),tsgmt=as.POSIXct(0,origin='1970-01-01',tz='GMT')) |>
+      dplyr::mutate(label=format(date,'%d/%m')) 
+
+ ggplot2::ggplot()+ 
+  ggplot2::coord_polar() +
+  ggplot2::geom_text(data=dates,ggplot2::aes(tsgmt,date,label=label),size=8)+
+  {if(nrow(path.data)>1) ggplot2::geom_path(data = path.data, ggplot2::aes(tsgmt,date,group=period,color=Location), size=22)}+
+  ggplot2::geom_point(data = event.data, ggplot2::aes(bingmt,date), size=6, shape=16, color='black')+
+  ggrepel::geom_label_repel(data = event.data, ggplot2::aes(bingmt,date,label=label),size=8) +
+  ggplot2::geom_vline(xintercept = nightstart,colour='#117733',linetype='dashed',size=1)+
+  ggplot2::geom_vline(xintercept = nightend,colour='#DDCC77',linetype='dashed',size=1)+
+  ggplot2::geom_vline(xintercept = daystart,colour='#882255',linetype='dashed',size=1)+
+  ggplot2::scale_x_datetime(breaks = scales::date_breaks('1 hour'),labels=scales::label_date('%H:%M'),limits=xlims)+
+  ggplot2::scale_y_datetime(breaks = scales::date_breaks('1 day'),limits=ylims)+
+  ggplot2::labs(x='',y='')+
+  ggplot2::theme_bw()+
+  ggplot2::scale_color_manual(breaks = motion.colours$breaks, values = motion.colours$values)+   
+  ggplot2::theme(axis.text.y=ggplot2::element_blank(),axis.ticks.y=ggplot2::element_blank(),text = ggplot2::element_text(size = 36,face='bold'),legend.position = 'bottom')
+
+    } else {
+      ggplot2::ggplot()+
+      ggplot2::labs(title = 'No data')
+    }
+  }
+
+### define dots
+orangefill <-
+  '<span style = "color: #DDCC77;;">&#11044;</span>'
+greenfill <-
+  '<span style = "color: #117733;;">&#11044;</span>'  
+greyfill <-
+  '<span style = "color: grey;">&#11044</span>' 
+orangecircle <-
+  '<span style = "color: #DDCC77;">&#9711</span>' 
+
+dots <-
+  data.frame(state=c('Within Bounds', 'Out Of Bounds', 'No Sensors','Sensors Offline','No VIP'),
+             icon=c(greenfill,orangefill,greyfill,orangecircle,greyfill))
+
+alertnames <-
+  data.frame(time=c('Day','Day','Day','Night','Night','24 hrs'),
+    concern=c('Hygiene','Nutrition','Social','Rest','Door at night','Circle of care'),
+             type=c('Bathroom Day','Food Prep Day','External Door Open Day','Night Activity Ex Bedroom Five Relative','External Door Open Night','Family Using App'))
+
+settings_names <-
+  data.frame(key=c('nightstart','nightend','nightlength','daystart','wait_time'),
+             parameter=c('Night start','Night end','Length of night','Day start','Wait Time'))
+
+limits <-
+    data.frame(key=c('nightstart','nightend','nightlength','daystart','wait_time'),
+               mean=c(-0.373,6.9,7.27,9.0,2.35),
+               sd=c(1.3,1.1,1,1.5,1),
+               settings.distance=c(1.5,1.5,1.5,1.5,1.5))
+
+### get site details 
+casequery <- paste0("SELECT name AS Group,group_site_nickname AS Reference,site_nickname AS Circle,Sitename,to_timestamp(min(datecreated))::date AS Since,
+to_timestamp(max(datecreated))::date AS Until,
+to_timestamp(max(datecreated))::date - to_timestamp(min(datecreated))::date AS days,
+now() AT TIME ZONE 'Europe/London' AS Generated FROM
+messages 
+JOIN howzsites
+USING (hid)
+LEFT JOIN howzsite_group_mappings
+USING (hid)
+LEFT JOIN groups
+USING (group_id)
+LEFT JOIN usersitemappings
+USING (hid)
+WHERE sitename = ",params$sitename," AND ROLE = 0 GROUP BY name,sitename,group_site_nickname,site_nickname,now()")
+
+case <-
+  howzfunc::hsql(live,casequery)
+
+### get alerts
+alertsquery <- 
+paste0("SELECT DISTINCT sitename,textid,header,body,TO_TIMESTAMP(datecreated)::date AS date,systeminsertdate FROM messages 
+JOIN howzsites
+USING (hid)
+JOIN messagetext
+USING (textid)
+WHERE textid >= 109
+AND datecreated >= (EXTRACT(EPOCH FROM now())-(86400*8))::INTEGER
+AND sitename = ", params$sitename)
+
+status <- 
+  howzfunc::hsql(live,alertsquery) |>
+  tidyr::separate(header,into=c('type','state'),sep='-') |>
+  dplyr::mutate(dplyr::across(3:4,stringi::stri_trim_both)) |>
+  dplyr::inner_join(dots,by='state') |>
+  dplyr::inner_join(alertnames,by='type') |>
+  dplyr::group_by(type,date) |> # needed to remove duplicate values created in initial releases
+  dplyr::slice_min(order_by = systeminsertdate,n = 1) |>
+  dplyr::ungroup()
+
+
+pquery <- paste0("SELECT sitename,daystart::text,nightstart::text,nightend::text,wait_time::text,systeminsertdate FROM alerts
+JOIN howzsites 
+USING (hid)
+WHERE sitename = ",params$sitename)
+
+settings <-
+  howzfunc::hsql(live,pquery) |>
+  tidyr::gather(key=key,value=setting,2:5) |>
+  dplyr::mutate(setting=as.POSIXct(setting,format='%H:%M:%S')) |>
+  dplyr::mutate(setting=howzfunc::dechour(setting)) |>
+  dplyr::mutate(setting=ifelse(setting > 12, setting-24, setting)) |>
+  tidyr::spread(key=key,value=setting) |>
+  dplyr::mutate(nightlength=nightend-nightstart) |>
+  tidyr::gather(key=key,value=setting,3:7) |>
+  dplyr::inner_join(settings_names,by='key') |>
+  dplyr::inner_join(limits,by='key') 
+
+### get activity messages
+pquery <- paste0("SELECT h.sitename,datecreated,short_description,sensor_name,macsidid,activity_tracking,icon FROM messages m
+  JOIN messagetext USING (textid)
+  LEFT JOIN device_howzsite_mappings dhm on m.macsidid = dhm.mac_sid_id
+  JOIN howzsites h ON h.hid = m.hid
+  LEFT JOIN howzsite_group_mappings hgm ON h.hid = hgm.hid
+  LEFT JOIN groups g ON g.group_id = hgm.group_id
+  WHERE sitename = ",params$sitename) 
+
+messages <- howzfunc::hsql(live,pquery) |>
+  dplyr::filter(activity_tracking) ## |>
+  ## dplyr::filter(!(sensor_name %in% c('Bedroom'))) 
+
+max.activity.date = ifelse(is.null(params$max.activity.date),
+                            as.Date(as.POSIXct(max(messages$datecreated),origin='1970-01-01',tz='Europe/London')),
+                            as.Date(params$max.activity.date))
+
+### get fitted values and dotplots from PGCirc
+PGCircOutput <-
+  PGCircRoutine(data = messages, 
+                tz = 'Europe/London',
+                max.days = params$max.days,
+                bins = 96,
+                max.date = max.activity.date,
+                minseglen.periodic = params$minseglen.periodic,
+                minseglen.global.days = params$minseglen.global.days,
+                max.periodic.cpts = params$max.periodic.cpts,
+                pen.global.mult=1,
+                wt.confidence = .99,
+                plotdays = params$max.days+1,
+                nightat = params$nightat,
+                title="", #paste0(params$sitename,'-',case$reference),
+                subtitle="", #gsub(", ", " ", toString(unique(messages$sensor_name))),
+                caption = FALSE
+                )
+
+fit <-
+  PGCircOutput$summary |>
+  dplyr::select(nightstart,nightend,daystart,day.wt) |>
+  dplyr::rename(wait_time=day.wt) |>
+  tidyr::gather(key=key,value=fit,1:4) |>
+  dplyr::mutate(fit=ifelse(fit > 12 & key !='wait_time', fit-24, fit)) 
+
+### put fitted values and settings into a single table and compare differences between fit and average values and fit and settings
+settings <-
+  settings |>
+  dplyr::inner_join(fit,by="key") |>
+  dplyr::mutate(fit.mean.distance = abs(mean-fit)/sd) |>
+  dplyr::mutate(fit.mean.status=ifelse(fit.mean.distance>2,orangefill,greenfill)) |>
+  dplyr::mutate(fit.settings.distance=abs(setting-fit)) |>
+  dplyr::mutate(fit.settings.status=ifelse(fit.settings.distance>1.5,orangefill,greenfill)) |>
+  dplyr::mutate(fit=as.POSIXct(fit*3600,tz='GMT',origin='1970-01-01')) |>
+  dplyr::mutate(fit=format(fit,format='%H:%M')) |>
+  dplyr::mutate(setting=as.POSIXct(setting*3600,tz='GMT',origin='1970-01-01')) 
+
+### reformat settings to make it easier to pass to dial plot
+plot.settings <-
+  settings |>
+  dplyr::select(key,setting) |>
+  tidyr::spread(key=key,value=setting)
+
+### message re changes in routine
+
+settings.message <- paste(  '<span style = "color: grey;">&#11044;</span>','Settings last updated', format(as.Date(unique(settings$systeminsertdate)),format='%d/%m/%Y'))
+days.last.change <- as.integer(Sys.Date()-PGCircOutput$summary$last.change)
+change.message <- paste(  '<br> <span style = "color: #DDCC77;">&#11044;</span>','Routine change detected within last 7 days on',
+                             format(as.Date(PGCircOutput$summary$last.change),format='%d/%m/%Y'))
+no.change.message <- paste(  '<br> <span style = "color: #117733;">&#11044;</span>','Routine stable for',days.last.change,'days since',
+                                   format(as.Date(PGCircOutput$summary$last.change),format='%d/%m/%Y'))
+routine.message <- ifelse(days.last.change<=7,change.message,no.change.message) 
+
+### placeholder for notes
+notes <-
+  data.frame(note=c(''))
+
+### logging of results
+write.csv(x = PGCircOutput$summary,file = paste0('log/',params$sitename,'-',params$max.periodic.cpts,'.csv'))
+
+
+
+```
+
+```{r, echo=FALSE}
+### logo
+htmltools::a(href='https://www.howz.com',
+htmltools::img(src = knitr::image_uri(file.path("/users/jonathanburr/r analysis/howz white.png")), 
+               alt = 'logo', 
+               style = 'position:absolute; top:0;right:0; padding:10px;')
+)
+```
+
+### Case
+
+```{r, echo=FALSE}
+case |>
+  dplyr::mutate(generated=format(generated,format='%d/%m/%Y %H:%M')) |>
+  dplyr::mutate(since = format(since,format='%d/%m/%Y')) |>  
+  dplyr::mutate(until = format(until,format='%d/%m/%Y')) |>
+  #dplyr::select(group,reference,sitename,since,until,days,generated) |>
+  kableExtra::kbl(escape=FALSE,align = 'l',col.names=c('Group','Reference','Circle','Sitename','Since','Until','Days','Generated')) |>
+  kableExtra::kable_styling(full_width = FALSE,position = 'l') 
+
+```
+
+### Care
+Night period statuses are for the night starting at the end of the date shown
+
+```{r, echo=FALSE}
+if(nrow(status>1)) {
+status |>
+  dplyr::select(time,concern,icon,date) |>
+  dplyr::rename(Time=time,Concern=concern) |>
+  tidyr::spread(key = date, value = icon) |>
+  dplyr::rename_with(~ format(as.Date(.x),format='%d/%m'),-1:-2) |>
+  kableExtra::kbl(escape=FALSE,align=c('l','l',rep('c',8))) |>
+  kableExtra::kable_styling(full_width = TRUE,position = 'l') |>
+  kableExtra::collapse_rows(columns = 1,valign = 'top') 
+}
+```
+
+### Routine
+`r settings.message`
+`r routine.message`
+
+```{r, echo=FALSE}
+settings |>
+  dplyr::mutate(setting=format(setting,format='%H:%M')) |>
+  dplyr::select(parameter,fit,fit.mean.status,setting,fit.settings.status) |>
+  kableExtra::kbl(escape=FALSE,align=c('l','l',rep('c',7)),col.names=c('Parameter','Calculated','Reasonable','Setting','Close to Calculated')) |>
+  kableExtra::kable_styling(full_width = FALSE,position = 'l') 
+
+```
+
+---
+
+### Last 7 days by type of activity
+
+#### Motion and external doors
+
+```{r, echo=FALSE}
+
+movement <-
+    c('Main Door','Front Door','Back Door',
+                      'Bedroom',
+                      'Living Room',
+                      'Lounge',
+                      'Kitchen',
+                      'Toilet',
+                      'Bathroom',
+                      'Hallway',
+                      'Landing')
+
+ADL <-
+    c('Microwave','Toaster','Grill','Fridge Door','Bathroom','Toilet',
+                      'Kettle',
+                      'Kitchen')
+
+```
+
+
+
+```{r, echo=FALSE, fig.dim = c(24,24)}
+DialPlots(data = messages,days = 7,tz = 'Europe/London',nightstart = plot.settings$nightstart,nightend = plot.settings$nightend,daystart = plot.settings$daystart,
+          sensor_names = movement)
+```
+
+#### Daily Living
+Appliance use grouped together in 30 minute periods
+
+```{r, echo=FALSE, fig.dim = c(24,24)}
+DialPlots(data = messages,days = 7,tz = 'Europe/London',nightstart = plot.settings$nightstart,nightend = plot.settings$nightend,daystart = plot.settings$daystart,
+          sensor_names = ADL)
+```
+
+---
+
+### Long term periods of activity and changes 
+`r paste0('Date shown up to ',format(as.Date(max.activity.date),format='%d/%m/%Y'),'.  Shades of grey group periods of similar levels of activity and solid vertical lines indicate changes in behaviour.   Dotted horizontal lines are the current settings for night start, night end and day start.  Dotted vertical line is at 6 weeks.')`
+```{r, echo=FALSE, fig.dim = c(10, 6)}
+
+PGCircOutput$plot +
+  ggplot2::geom_hline(yintercept = plot.settings$nightend,color='orange',linetype='dashed')+
+  ggplot2::geom_hline(yintercept = plot.settings$nightstart,color='green',linetype='dashed')+
+  ggplot2::geom_hline(yintercept = plot.settings$daystart,color='red',linetype='dashed')
+```
+
+#### Routine 
+```{r, echo=FALSE, fig.dim = c(10, 6)}
+options(knitr.kable.NA = '-')
+PGCircOutput$routines |>
+  kableExtra::kbl(col.names=c('Date of change','Days','Night start','Night end','Night length','Night start','Night end','Night length','Day','Night'),
+                  caption='Values based on routines calculated by the Howz algorithm NOT current settings') |>
+  kableExtra::add_header_above(c(" " = 2, "Time" = 2, "Hours"=1, "Change in hours" = 3, "Wait Time" = 2)) |>
+  kableExtra::kable_styling(full_width = FALSE,position = 'l') 
+```
+
+#### Activity
+```{r, echo=FALSE, fig.dim = c(10, 6)}
+options(knitr.kable.NA = '-')
+PGCircOutput$activity |>
+  dplyr::mutate(across(3:6, ~ round(.x * 100,1))) |>
+  kableExtra::kbl(col.names=c('Date of change','Days','Day','Night','Day','Night','Ratio'),
+                  caption='Values based on routines calculated by the Howz algorithm NOT current settings') |>
+  kableExtra::add_header_above(c(" " = 2, "% of time active" = 2, "% change" = 2, " "=1)) |>
+  kableExtra::kable_styling(full_width = FALSE,position = 'l') 
+```
+
+
+
+---
+## Current warnings
+
+```{r, echo=FALSE}
+status |>
+  dplyr::group_by(type) |>
+  dplyr::slice_max(order_by = date,n = 1) |>  
+  dplyr::filter(state != 'Within Bounds') |>
+  dplyr::ungroup() |>
+  dplyr::select(time,concern,body) |>
+  dplyr::arrange(time,concern) |>
+  kableExtra::kbl(escape=FALSE,col.names = c('Time','Concern','Warning')) |>
+  kableExtra::kable_styling()
+```

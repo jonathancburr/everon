@@ -1,0 +1,137 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2761
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\fswiss\fcharset0 ArialMT;}
+{\colortbl;\red255\green255\blue255;\red26\green26\blue26;\red255\green255\blue255;\red0\green0\blue0;
+}
+{\*\expandedcolortbl;;\cssrgb\c13333\c13333\c13333;\cssrgb\c100000\c100000\c100000;\cssrgb\c0\c0\c0;
+}
+\paperw11900\paperh16840\margl1440\margr1440\vieww37900\viewh20740\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs32 \cf2 \cb3 \expnd0\expndtw0\kerning0
+/**\
+* @brief \'a0 Returns activity value based on the average of the maximum\
+* \'a0 \'a0 \'a0 \'a0 \'a0differences located in the filter. When activity value has been\
+* \'a0 \'a0 \'a0 \'a0 \'a0defined, the filter is reset with zeros.\
+*\
+* @param \'a0 None\
+*\
+* @return \'a0Activity value\
+*/\
+uint8_t CAD_get_activity_by_average_maximum_difference(void)\
+\{\
+\'a0 \'a0volatile uint32_t average_for_sqrt = 0.0;\
+\'a0 \'a0volatile uint64_t sum_average_difference = 0;\
+\'a0 \'a0volatile uint8_t average_maximum_difference = 0;\
+\'a0 \'a0uint8_t pointer = 0;\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Calculate the total sum of the maximum differences.\
+\'a0 \'a0for (pointer = 0 ; pointer < counter_fifo_reading ; pointer++)\
+\'a0 \'a0\{\
+\'a0 \'a0 \'a0 \'a0sum_average_difference += filter_maximum_difference_sum[pointer];\
+\'a0 \'a0 \'a0 \'a0filter_maximum_difference_sum[pointer] = 0;\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0 \'a0 \'a0// The loop has to be broken if the maximum pointer (index)\
+\'a0 \'a0 \'a0 \'a0// value has been reached.\
+\'a0 \'a0 \'a0 \'a0if (pointer >= (FILTER_SIZE-1))\
+\'a0 \'a0 \'a0 \'a0\{\
+\'a0 \'a0 \'a0 \'a0 \'a0 \'a0break;\
+\'a0 \'a0 \'a0 \'a0\}\
+\'a0 \'a0\}\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Calculate average maximum difference.\
+\'a0 \'a0if (counter_fifo_reading > 0)\
+\'a0 \'a0\{\
+\'a0 \'a0 \'a0 \'a0average_for_sqrt = sum_average_difference / counter_fifo_reading;\
+\'a0 \'a0 \'a0 \'a0uint16_t average = (average_for_sqrt > 0xffff ? 0xffff : average_for_sqrt);\
+\'a0 \'a0 \'a0 \'a0average_maximum_difference = (uint8_t)(floorSqrt(average));\
+\'a0 \'a0\}\
+\'a0 \'a0else\
+\'a0 \'a0\{\
+\'a0 \'a0 \'a0 \'a0average_maximum_difference = 0;\
+\'a0 \'a0\}\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Set the pointer to point the first item of the filter.\
+\'a0 \'a0// Reset also FIFO reading counter.\
+\'a0 \'a0CAD_reset_table();\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// NOTE! Activity value has to be at least 1, otherwise the server does\
+\'a0 \'a0// not update the device status.\
+\'a0 \'a0if (average_maximum_difference < 1)\
+\'a0 \'a0\{\
+\'a0 \'a0 \'a0 \'a0average_maximum_difference = 1;\
+\'a0 \'a0\}\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Return the average maximum difference.\
+\'a0 \'a0return average_maximum_difference;\
+\}\cf0 \cb1 \
+\
+\cf2 \cb3 and here is the code that fills the fifo where the average is calculated:\cf0 \cb1 \
+\cf2 \cb3 \
+/**\
+* @brief \'a0 Reads acceleration values of axes and compares them to the previous\
+* \'a0 \'a0 \'a0 \'a0 \'a0values. The noise filter is used to remove too low differences in\
+* \'a0 \'a0 \'a0 \'a0 \'a0case the device is not move at all.\
+*\
+* @param \'a0 None\
+*\
+* @return \'a0none\
+*/\
+void CAD_calculate_activity_by_current_difference(void)\
+\{\
+\'a0 \'a0uint16_t difference[3] = \{0,0,0\};\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0volatile uint16_t diff_axis_x = 0;\
+\'a0 \'a0volatile uint16_t diff_axis_y = 0;\
+\'a0 \'a0volatile uint16_t diff_axis_z = 0;\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0static volatile uint16_t maximum_axis_activity;\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Check that the previous acceleration values have been defined. It is\
+\'a0 \'a0// unlike that all axes values are zero after the first previous axes\
+\'a0 \'a0// data has been defined.\
+\'a0 \'a0if (acceleration_previous[AXIS_X] != 0 ||\
+\'a0 \'a0 \'a0 \'a0 acceleration_previous[AXIS_Y] != 0 ||\
+\'a0 \'a0 \'a0 \'a0 \'a0acceleration_previous[AXIS_Z] != 0)\
+\'a0 \'a0\{\
+\'a0 \'a0 \'a0 \'a0// Calculate difference values for each axis data by subtracting the\
+\'a0 \'a0 \'a0 \'a0// previous axis data from the current axis data. If the device has\
+\'a0 \'a0 \'a0 \'a0// been moved, there has to be difference in axis values.\
+\'a0 \'a0 \'a0 \'a0difference[AXIS_X] = (uint16_t)abs(acceleration_current[AXIS_X] - acceleration_previous[AXIS_X]);\
+\'a0 \'a0 \'a0 \'a0difference[AXIS_Y] = (uint16_t)abs(acceleration_current[AXIS_Y] - acceleration_previous[AXIS_Y]);\
+\'a0 \'a0 \'a0 \'a0difference[AXIS_Z] = (uint16_t)abs(acceleration_current[AXIS_Z] - acceleration_previous[AXIS_Z]);\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0 \'a0 \'a0// Filter axis noise. Even the device is stable there is little\
+\'a0 \'a0 \'a0 \'a0// difference in axis values that has to be eliminated.\
+\'a0 \'a0 \'a0 \'a0if (difference[AXIS_X] < AXIS_NOISE_FILTER_LIMIT_CURRENT) \{difference[AXIS_X] = 0;\}\
+\'a0 \'a0 \'a0 \'a0if (difference[AXIS_Y] < AXIS_NOISE_FILTER_LIMIT_CURRENT) \{difference[AXIS_Y] = 0;\}\
+\'a0 \'a0 \'a0 \'a0if (difference[AXIS_Z] < AXIS_NOISE_FILTER_LIMIT_CURRENT) \{difference[AXIS_Z] = 0;\}\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0 \'a0 \'a0// Calculate maximum values of each axis.\
+\'a0 \'a0 \'a0 \'a0maximum_axis_activity = difference[AXIS_X];\
+\'a0 \'a0 \'a0 \'a0maximum_axis_activity += difference[AXIS_Y];\
+\'a0 \'a0 \'a0 \'a0maximum_axis_activity += difference[AXIS_Z];\
+\'a0 \'a0\}\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Shift data sum table data.\
+\'a0 \'a0filter_maximum_difference_sum[pointer_filter++] = maximum_axis_activity;\
+\'a0 \'a0pointer_filter &= (FILTER_SIZE-1);\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Set current data as a previous data for next comparison.\
+\'a0 \'a0acceleration_previous[AXIS_X] = acceleration_current[AXIS_X];\
+\'a0 \'a0acceleration_previous[AXIS_Y] = acceleration_current[AXIS_Y];\
+\'a0 \'a0acceleration_previous[AXIS_Z] = acceleration_current[AXIS_Z];\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Clear maximum activity for the next loop.\
+\'a0 \'a0maximum_axis_activity = 0;\cf0 \cb1 \
+\cf2 \cb3 \
+\'a0 \'a0// Increase FIFO reading counter.\
+\'a0 \'a0counter_fifo_reading++;\
+\}\cf0 \cb1 \
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+
+\f1 \cf2 \cb3 /**}
