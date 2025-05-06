@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Apple Health Export" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <time>2025-05-06T07:37:42Z</time>
+  </metadata>
+  <trk>
+    <name>Route 2022-07-27 4:17pm</name>
+    <trkseg>
+      <trkpt lon="9.736809" lat="40.690815"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737000" lat="40.690996"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737024" lat="40.691023"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737044" lat="40.691048"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737066" lat="40.691070"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737084" lat="40.691148"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737128" lat="40.691179"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737211" lat="40.691212"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+      <trkpt lon="9.737216" lat="40.691237"><ele>0.000000</ele><time>2022-07-27T15:17:30Z</time><extensions><speed>-1.000000</speed><course>-1.000000</course><hAcc>0.000000</hAcc><vAcc>-1.000000</vAcc></extensions></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
