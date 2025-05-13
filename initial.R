@@ -1,4 +1,5 @@
 require(ggplot2)
+require(dplyr)
 
 # Source function 
 source("~/LocalRepo/Everon/PGCIRC/PGcpt.R")
@@ -26,18 +27,13 @@ data <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/everon/influx
   dplyr::mutate(device = gsub(pattern = 'deviceId=','',device)) |>
   dplyr::filter(device == '05301BE3') |>
   dplyr::select(ts, value) |>
-  #dplyr::filter(ts >= start) |>
-  #dplyr::filter(ts < end) |>
+  dplyr::filter(ts >= start) |>
+  dplyr::filter(ts < end) |>
   dplyr::right_join(full_time, by = 'ts') |>
   dplyr::mutate(value = tidyr::replace_na(value, 0)) |>
   dplyr::arrange(ts) |>
   dplyr::mutate(bin = lubridate::floor_date(ts, "15 minutes")) |>
   howzfunc::howzcp(5, 2)
-
-data |>
-  ggplot(aes(ts,value)) + geom_point() +
-  geom_segment(data = steps, aes(x = tes_start_time, xend = tes_end_time, 
-                                 y = 40, yend = 40), color = 'red', size = 2)
 
 bybin <-
   data |>
@@ -48,21 +44,18 @@ bybin <-
   dplyr::mutate(binnum = dplyr::row_number())
 
 bybin |>
-#dplyr::filter(sdbin > 0) |>  
-dplyr::filter(bin >= as.POSIXct('2025-05-01 00:00:00')) |>
-dplyr::filter(bin < as.POSIXct('2025-05-03 00:00:00')) |>    
-ggplot(aes(bin, maxbin)) + geom_point() + geom_label(aes(label=format(bin,"%H:%M")))
-
-bybin |>
   dplyr::group_by(binnum) |>
   dplyr::summarise(avgbin = mean(avgbin)) |>
   ggplot2::ggplot(aes(binnum, avgbin)) + geom_bar(stat='identity')
 
 dat = data_circ(bybin$avgbin,96)
+tail(dat)
 
 results = pgcpt(dat, period.len=bins, minseglen.periodic=8, minseglen.global= 7*96,
                 method.periodic="SNcirc", method.global="PELT", max.periodic.cpts=10, penalty.periodic=3*log(length(dat)),
                 penalty.global=1*log(nrow(dat)), dist="Normal mean", restrict=TRUE, circData=FALSE)
+
+results$pgcpt.results$Periodic_cpt[[1]]
 
 bybin |>
   dplyr::group_by(binnum) |>
@@ -87,3 +80,17 @@ data |>
   ggplot(aes(ts, value)) + geom_point() + 
   geom_step(aes(ts,mean), color = 'red') +
   geom_label(aes(label=format(ts,"%H:%M")))
+
+
+a<-
+  data |>
+  dplyr::select(ts, value) |>
+  dplyr::right_join(full_time, by = 'ts') |>
+  dplyr::mutate(value = tidyr::replace_na(value, 0)) |>
+  dplyr::arrange(ts) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, "15 minutes")) |>   
+  dplyr::mutate(date = as.Date(bin)) |>
+  dplyr::group_by(date) |>
+  dplyr::mutate(binnum = dplyr::dense_rank(bin)) |>
+  dplyr::ungroup()
+

@@ -1,0 +1,134 @@
+---
+title: "Everon Investigation"
+author: "Jonathan Burr"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(ggplot2)
+
+# Source function 
+source("~/LocalRepo/Everon/PGCIRC/PGcpt.R")
+source("~/LocalRepo/Everon/PGCIRC/SNcirc.R")
+
+
+```
+
+## Objective 
+
+To assess whether the activity data from the Everon pendant can be used with the PGCirc algorithm
+
+## Get data and save locally
+
+Everon upload data for the devices daily at 4am at the url below.
+
+```{r}
+
+url <- "https://howzdata.blob.core.windows.net/upload/influx_export.csv"
+destfile <- "/Users/jonathanburr/LocalRepo/Everon/data/everon/influx_export.csv"
+download.file(url, destfile, method = "curl")
+Sys.timezone()
+
+```
+
+## Define parameters
+
+```{r}
+start <-  as.POSIXct('2025-04-23 00:00:00',tz = 'Europe/London')
+end <- as.POSIXct('2025-05-02 00:00:00', tz = 'Europe/London')   
+bins <- 96
+bin.size <- "15 minutes"
+```
+
+## Get and filter data for specific device 
+
+```{r}
+data <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/everon/influx_export.csv") |>
+  dplyr::mutate(ts = as.POSIXct(time/1000)) |>
+  dplyr::rename(device = tags) |>
+  dplyr::mutate(device = gsub(pattern = 'deviceId=','',device)) |>
+  dplyr::filter(device == '05301BE3') |>
+  dplyr::filter(ts >= start) |>
+  dplyr::filter(ts < end) 
+  
+tail(data)  
+nrow(data)
+```
+
+## Plot data 
+
+```{r}
+data |>
+  ggplot(aes(ts,value)) + geom_point() 
+```
+
+
+## Create empty set of 1 minute values
+
+When the device is out of range no data is sent which are the blankc values in the plot above.   A full set of timestamps for the observation period is created to readily determine periods when the device is out of range.
+
+```{r}
+full_time <- data.frame(ts = seq(start, end-60, by = "1 min")) 
+```
+
+
+## Group data into 15 minute bins
+
+```{r}
+data <-
+  data |>
+  dplyr::select(ts, value) |>
+  dplyr::right_join(full_time, by = 'ts') |>
+  dplyr::mutate(value = tidyr::replace_na(value, 0)) |>
+  dplyr::arrange(ts) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, "15 minutes")) |>  
+  dplyr::mutate(bin = hms::as_hms(bin)) |>
+  dplyr::mutate(date = as.Date(ts)) 
+nrow(data)
+tail(data)
+readr::write_csv(data,'test.csv')
+```
+
+## Calculate the average activity value for each bin and day
+
+```{r}
+bybin <-
+  data |>
+  dplyr::group_by(date, bin) |>
+  dplyr::summarise(avgbin = mean(value)) |>
+  dplyr::ungroup()
+readr::write_csv(bybin,'bin.csv')
+nrow(bybin)
+
+```
+
+## Run PGCirc
+
+```{r}
+dat = data_circ(bybin$avgbin,96)
+results = pgcpt(dat, period.len=bins, minseglen.periodic=4, minseglen.global= 7*96,
+                method.periodic="SNcirc", method.global="PELT", max.periodic.cpts=10, penalty.periodic=3*log(length(dat)),
+                penalty.global=1*log(nrow(dat)), dist="Normal mean", restrict=TRUE, circData=FALSE)
+
+length(dat)
+tail(dat)
+results$pgcpt.results$Periodic_cpt[[1]]
+
+cpts <- data.frame(cpts = as.POSIXct((results$pgcpt.results$Periodic_cpt[[1]]-1) * 900))
+cpts
+```
+
+### Add lines from PGCirc to plot
+
+```{r}
+class(bybin$bin)
+
+bybin |>
+  dplyr::group_by(bin) |>
+  dplyr::summarise(avgbin = mean(avgbin)) |>
+  ggplot2::ggplot(aes(bin, avgbin)) + geom_bar(stat='identity') +
+  ggplot2::geom_vline(xintercept = cpts$cpts)
+```
