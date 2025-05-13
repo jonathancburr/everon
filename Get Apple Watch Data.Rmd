@@ -1,0 +1,89 @@
+---
+title: "Prepare Apple Watch Data"
+author: "Jonathan Burr"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(xml2)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+#setwd("/Users/jonathanburr/LocalRepo/Everon/data/apple_health_export/")
+```
+
+
+## Date parameters
+
+```{r}
+start <- as.POSIXct('2025-04-23 00:00:00',tz = 'Europe/London')
+```
+
+## Load the XML file
+
+```{r}
+doc <- read_xml("/Users/jonathanburr/LocalRepo/Everon/data/apple_health_export/export.xml")
+records <- xml_find_all(doc, ".//Record[@type='HKQuantityTypeIdentifierStepCount']")
+```
+
+## Step Count
+
+```{r}
+steps_records <- xml_find_all(doc, ".//Record[@type='HKQuantityTypeIdentifierStepCount']")
+steps_df <- tibble(
+  type = "StepCount",
+  start_time = ymd_hms(xml_attr(steps_records, "startDate")),
+  end_time = ymd_hms(xml_attr(steps_records, "endDate")),
+  value = as.character(xml_attr(steps_records, "value"))
+) |>
+  dplyr::filter(start_time > start)
+
+head(steps_df)
+
+steps_df |>
+  ggplot(aes(start_time, as.numeric(value))) + geom_point()
+
+```
+
+## Heart Rate
+
+```{r}
+heart_records <- xml_find_all(doc, ".//Record[@type='HKQuantityTypeIdentifierHeartRate']")
+heart_df <- tibble(
+  type = "HeartRate",
+  start_time = ymd_hms(xml_attr(heart_records, "startDate")),
+  end_time = ymd_hms(xml_attr(heart_records, "endDate")),
+  value = as.character(xml_attr(heart_records, "value"))
+) |>
+  dplyr::filter(start_time > start)
+
+head(heart_df)
+
+heart_df |>
+  ggplot(aes(start_time,as.numeric(value))) + geom_point()
+
+```
+
+## Sleep Analysis 
+
+```{r}
+sleep_records <- xml_find_all(doc, ".//Record[@type='HKCategoryTypeIdentifierSleepAnalysis']")
+sleep_df <- tibble(
+  type = "Sleep",
+  start_time = ymd_hms(xml_attr(sleep_records, "startDate")),
+  end_time = ymd_hms(xml_attr(sleep_records, "endDate")),
+  value = xml_attr(sleep_records, "value")) |>
+  dplyr::mutate(value = gsub('HKCategoryValueSleepAnalysis','',value)) |>
+  dplyr::filter(start_time > start)
+
+head(sleep_df)
+
+sleep_df |>
+  ggplot(aes(start_time, value)) + geom_point()
+
+
+```
+
+

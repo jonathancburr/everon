@@ -3,23 +3,29 @@ title: "Everon Investigation"
 author: "Jonathan Burr"
 date: "`r Sys.Date()`"
 output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
 require(ggplot2)
+require(dplyr)
 
 # Source function 
 source("~/LocalRepo/Everon/PGCIRC/PGcpt.R")
 source("~/LocalRepo/Everon/PGCIRC/SNcirc.R")
+options(scipen = 999)
 
 
 ```
 
-## Objective 
+## Objective
 
-To assess whether the activity data from the Everon pendant can be used with the PGCirc algorithm
+To assess whether the activity data from the Everon pendant can be used
+with the PGCirc algorithm
 
 ## Get data and save locally
 
@@ -31,19 +37,20 @@ url <- "https://howzdata.blob.core.windows.net/upload/influx_export.csv"
 destfile <- "/Users/jonathanburr/LocalRepo/Everon/data/everon/influx_export.csv"
 download.file(url, destfile, method = "curl")
 Sys.timezone()
+knitr::opts_chunk$set(fig.width = 10, fig.height = 5)
 
 ```
 
 ## Define parameters
 
 ```{r}
-start <-  as.POSIXct('2025-04-23 00:00:00',tz = 'Europe/London')
-end <- as.POSIXct('2025-05-02 00:00:00', tz = 'Europe/London')   
+start <-  as.POSIXct('2025-04-23 00:00:00',tz = 'UTC')
+end <- as.POSIXct('2025-05-07 00:00:00', tz = 'UTC')   
 bins <- 96
 bin.size <- "15 minutes"
 ```
 
-## Get and filter data for specific device 
+## Get and filter data for specific device
 
 ```{r}
 data <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/everon/influx_export.csv") |>
@@ -58,22 +65,23 @@ tail(data)
 nrow(data)
 ```
 
-## Plot data 
+## Plot data
 
 ```{r}
 data |>
   ggplot(aes(ts,value)) + geom_point() 
 ```
 
-
 ## Create empty set of 1 minute values
 
-When the device is out of range no data is sent which are the blankc values in the plot above.   A full set of timestamps for the observation period is created to readily determine periods when the device is out of range.
+When the device is out of range no data is sent which are the blankc
+values in the plot above. A full set of timestamps for the observation
+period is created to readily determine periods when the device is out of
+range.
 
 ```{r}
 full_time <- data.frame(ts = seq(start, end-60, by = "1 min")) 
 ```
-
 
 ## Group data into 15 minute bins
 
@@ -101,7 +109,6 @@ bybin <-
   dplyr::summarise(avgbin = mean(value)) |>
   dplyr::ungroup()
 readr::write_csv(bybin,'bin.csv')
-nrow(bybin)
 
 ```
 
@@ -131,4 +138,52 @@ bybin |>
   dplyr::summarise(avgbin = mean(avgbin)) |>
   ggplot2::ggplot(aes(bin, avgbin)) + geom_bar(stat='identity') +
   ggplot2::geom_vline(xintercept = cpts$cpts)
+```
+
+### Create synthetic data to demonstrate change detection
+
+### Comparison of sleep data
+
+```{r}
+
+sleep <- readRDS('sleep.rds')
+
+sleep_episodes <-
+  sleep |>
+  dplyr::filter(start_time > '2025-05-04 22:00:00' & start_time < '2025-05-05 12:00:00') |>
+  dplyr::mutate(value = as.factor(value)) |>
+  dplyr::mutate(value = forcats::fct_relevel(value, "AsleepDeep", "AsleepCore", "AsleepREM", "Awake", "Everon"))
+
+everon_data <-
+  data |>
+  dplyr::filter(ts > '2025-05-04 22:00:00' & ts < '2025-05-05 12:00:00') |>
+  dplyr::arrange(ts) |>
+  howzfunc::howzcp(seglen = 10, column = 2)
+
+ggplot() +
+  geom_segment(data = sleep_episodes, aes(x = start_time, xend = end_time, y = value, yend = value, color = value), linewidth = 10) +
+  geom_step(data = everon_data, aes(x = ts, y = 'Everon', linewidth = var)) +
+  theme(legend.position = "none") 
+
+```
+
+### Comparison of steps data
+
+```{r}
+
+steps <- readRDS('steps.rds')
+
+steps_episodes <- 
+  steps |> dplyr::filter(start_time > '2025-05-04 00:00:00' & start_time < '2025-05-06 00:00:00') |>
+  dplyr::mutate(value = as.numeric(value))
+
+everon_data <- 
+  data |> dplyr::filter(ts > '2025-05-04 00:00:00' & ts < '2025-05-06 00:00:00') |> 
+  dplyr::arrange(ts) |>
+  howzfunc::howzcp(seglen = 10, column = 2)
+
+ggplot() + geom_segment(data = steps_episodes, aes(x = start_time, xend
+= end_time, y = value, yend = value, color = value), linewidth = 5) +
+geom_step(data = everon_data, aes(x = ts, y = value, linewidth = var)) +
+theme(legend.position = "none")
 ```
