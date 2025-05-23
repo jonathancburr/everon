@@ -1,0 +1,253 @@
+---
+title: "Everon Night"
+author: "Jonathan Burr"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(ggplot2)
+require(dplyr)
+options(scipen = 999)
+Sys.timezone()
+knitr::opts_chunk$set(fig.width = 10, fig.height = 5)
+
+```
+
+## Objective
+
+To assess how the activity data from the Everon pendant can be used for analysis of night periods
+
+## Get data and save locally
+
+```{r}
+
+data <- readRDS('data/everon/everon_processed.rds')
+
+```
+
+## Define night date
+
+Nights are defined by the date before midnight
+
+```{r}
+ 
+data <- 
+  data |>
+  dplyr::mutate(date = as.Date(as.character(substr(ts, 1,12)))) |>
+  dplyr::mutate(night_date = ifelse(lubridate::hour (ts) < 12, date-1, date)) |>
+  dplyr::mutate(night_date = as.Date(night_date))                
+
+```
+
+
+## Truncate for night period 
+
+For this site 12 hours from 9pm to 9am
+
+```{r}
+ 
+data <- 
+  data |>
+  dplyr::filter((lubridate::hour(ts) >= 22) | (lubridate::hour(ts) < 8))          
+
+```
+
+## Plot values to find suitable nights for analysis
+A visual check suggests that night with a mean value > 2 are good candidates for analysis
+
+```{r}
+
+night_mean <-
+data |>
+  dplyr::group_by(night_date) |>
+  dplyr::summarise(mean = mean(value))
+
+data |>
+  dplyr::mutate(dechour = howzfunc::dechour(ts)) |>
+  dplyr::mutate(dechour = ifelse(dechour < 12, dechour+24, dechour)) |>
+  ggplot(aes(dechour,value)) + geom_point() + facet_wrap(night_date ~.) +
+  geom_label(data = night_mean, aes(23,30,label = round(mean,2))) +
+  labs(title = 'Hours from midday')
+
+```
+
+## Get sleep data from Apple watch
+### Compare with categorical data 
+
+```{r}
+
+sleep <- readRDS('sleep.rds') |>
+  dplyr::mutate(start_time = lubridate::with_tz(start_time, tzone = 'Europe/London'),
+                end_time = lubridate::with_tz(end_time, tzone = 'Europe/London')) |>
+  dplyr::mutate(date = as.Date(as.character(substr(start_time, 1,12)))) |>
+  dplyr::mutate(night_date = ifelse(lubridate::hour (start_time) > 12, date, as.Date(date-1))) |>
+  dplyr::mutate(night_date = as.Date(night_date))
+
+everon_data <-
+  night_mean |>
+  dplyr::filter(mean > 2) |>
+  dplyr::inner_join(data, by = 'night_date')
+
+plot_everon <-
+everon_data |>
+dplyr::filter(night_date == '2025-05-01') 
+
+plot_sleep <-
+  sleep |>
+  dplyr::filter(value == 'Awake') |>
+  dplyr::filter(night_date == '2025-05-04') 
+
+ggplot() +
+  geom_point(data = plot_everon, aes(ts, value)) + facet_grid(night_date ~.) +
+  geom_segment(data = plot_sleep, aes(x = start_time, xend = end_time, y= -10, yend = -10, color=value))
+  
+
+plot_everon <-
+  everon_data |>
+  dplyr::filter(night_date == '2025-05-04') |>
+  dplyr::filter(value >0) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, unit = '15 minutes')) |>
+  dplyr::group_by(bin) |>
+  dplyr::summarise(max = mean(value))
+  
+ggplot() +
+  geom_point(data = plot_everon, aes(bin, max)) +
+  geom_segment(data = plot_sleep, aes(x = start_time, xend = end_time, y= -10, yend = -10, color=value))  
+
+sum_sleep <-
+  sleep |>
+  dplyr::mutate(period = as.integer(end_time - start_time)) |>
+  dplyr::mutate(period_awake = ifelse(value == 'Awake', period, 0)) |>
+  group_by(night_date) |>
+  dplyr::summarise(awake = sum(period_awake), start_night = min(start_time), end_night = max(end_time))
+
+sum_everon <-
+  everon_data |>
+  dplyr::inner_join(sum_sleep, by = 'night_date') |>
+  dplyr::filter(ts >= start_night & ts <= end_night) |>
+  dplyr::filter(value >0) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, unit = '15 minutes')) |>
+  dplyr::group_by(night_date, bin) |>
+  dplyr::summarise(mean = mean(value)) |>
+  dplyr::filter(mean >= 3) |>
+  dplyr::group_by(night_date) |>
+  dplyr::summarise(n = n())
+  
+comp <-  
+sum_everon |>
+  dplyr::inner_join(sum_sleep, by ='night_date') #|>
+  #filter(n<20) 
+
+model <- lm(n ~ awake, comp)
+corr <- summary(model)$r.squared
+
+comp |>
+ggplot(aes(n, awake)) + geom_point() + geom_smooth(method = 'lm') +
+labs(title = 'Comparison of Everon and Apple Watch data', subtitle = paste('R^2 =',round(corr,3)), x = 'Everon - Number of above threshold bins', y = 'Apple Watch seconds awake')  
+
+```
+
+### Compare with energy data
+
+```{r}
+
+active_energy <- readRDS('active_energy.rds') |>
+  dplyr::mutate(start_time = lubridate::with_tz(start_time, tzone = 'Europe/London'),
+                end_time = lubridate::with_tz(end_time, tzone = 'Europe/London')) |>
+  dplyr::mutate(date = as.Date(as.character(substr(start_time, 1,12)))) |>
+  dplyr::mutate(night_date = ifelse(lubridate::hour (start_time) > 12, date, as.Date(date-1))) |>
+  dplyr::mutate(night_date = as.Date(night_date))
+
+active_energy <-
+  active_energy |>
+    dplyr::mutate(bin = lubridate::floor_date(start_time, unit = '15 minutes')) 
+
+bin_active_energy <-
+  active_energy |>
+  dplyr::group_by(bin) |>
+  dplyr::summarise(active_energy=sum(value))
+
+sum_active_energy <-
+  active_energy |>
+  dplyr::inner_join(sum_sleep, by = 'night_date') |>
+  dplyr::filter(start_time >= start_night & end_time <= end_night) |>
+  dplyr::group_by(night_date) |>
+  dplyr::summarise(active_energy = sum(value)) 
+
+comp <-  
+sum_everon |>
+  dplyr::inner_join(sum_active_energy, by ='night_date') #|>
+  #filter(n<20) 
+
+model <- lm(n ~ active_energy, comp)
+corr <- summary(model)$r.squared
+
+comp |>
+ggplot(aes(n, active_energy)) + geom_point() + geom_smooth(method = 'lm') +
+labs(title = 'Comparison of Everon and Apple Watch data', subtitle = paste('R^2 =',round(corr,3)), x = 'Everon - Number of above threshold bins', y = 'Apple Watch seconds awake')  
+
+
+comp <-  
+everon_data |>
+  dplyr::filter(value >0) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, unit = '15 minutes')) |>
+  dplyr::group_by(bin) |>
+  dplyr::summarise(mean = mean(value)) |>
+  dplyr::filter(mean > 3) |>
+  dplyr::inner_join(bin_active_energy, by ='bin')
+
+model <- lm(mean ~ active_energy, comp)
+corr <- summary(model)$r.squared
+readr::write_csv(comp, 'comp.csv')
+
+
+comp |>
+ggplot(aes(mean, active_energy)) + geom_point() + geom_smooth(method = 'lm') +
+labs(title = 'Comparison of Everon and Apple Watch data', subtitle = paste('R^2 =',round(corr,3)), x = 'Everon - Number of above threshold bins', y = 'Apple Watch seconds awake') 
+
+```
+
+## Calculation of rest start and end times
+### Find changepoints
+
+```{r}
+
+cpts <- 
+  data$value |>
+  changepoint::cpt.mean(method = 'PELT', minseglen = 480)
+
+data$cpt[attr(cpts,'cpts')] <- TRUE
+
+cpt_data <-
+data |>
+  dplyr::mutate(cpt = row_number(cpt)) |>
+  dplyr::mutate(cpt = zoo::na.locf(cpt, na.rm= FALSE)) |>
+  dplyr::mutate(cpt = replace(cpt, is.na(cpt),0)) |>
+  dplyr::group_by(cpt) |>
+  #dplyr::mutate(mean = ifelse(value == 0, 0, mean(value)), var = ifelse(value == 0, 0, var(value)))
+  dplyr::mutate(mean = mean(value), var = var(value))
+  
+cpt_data |>
+  dplyr::filter(night_date >= '2025-05-02' & night_date <= '2025-05-03') |>
+  ggplot() +
+  geom_point(aes(ts, value)) +
+  geom_step(aes(ts,mean))             
+              
+cpt_data_segments <-
+  cpt_data |>
+  dplyr::group_by(mean) |>
+  dplyr::summarise()
+
+kmeans(cpt_data_segments$mean,centers = 2)
+
+```
+
+
+
+

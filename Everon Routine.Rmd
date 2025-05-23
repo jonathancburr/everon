@@ -1,5 +1,5 @@
 ---
-title: "Everon Investigation"
+title: "Everon Routine"
 author: "Jonathan Burr"
 date: "`r Sys.Date()`"
 output: html_document
@@ -29,7 +29,7 @@ with the PGCirc algorithm
 
 ## Get data and save locally
 
-Everon upload data for the devices daily at 4am at the url below.
+Everon upload data for the devices daily at 9am at the url below.
 
 ```{r}
 
@@ -59,8 +59,6 @@ data <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/everon/influx
   dplyr::mutate(device = gsub(pattern = 'deviceId=','',device)) |>
   dplyr::filter(device == '05301BE3') |>
   dplyr::filter(ts >= start.date)
-
-  
 tail(data)  
 nrow(data)
 ```
@@ -123,47 +121,6 @@ data <-
 
 ```
 
-## Clustering of values
-
-```{r}
-
-clustered <-
-data |>
-  dplyr::filter(ts >= start.date) 
-
-clustered.non.zero <-  ### removes zero (out of range) values from cpt
-  clustered |>
-  dplyr::filter(value > 0)
-
-cpts <- 
-  clustered.non.zero$value |>
-  changepoint::cpt.mean(method = 'PELT', minseglen = 5)
-
-clustered.non.zero$cpt[attr(cpts,'cpts')] <- TRUE
-
-clustered <-
-  clustered |>
-  dplyr::left_join(dplyr::select(clustered.non.zero, -value), by = 'ts') |>
-  dplyr::mutate(cpt = row_number(cpt)) |>
-  dplyr::mutate(cpt = zoo::na.locf(cpt, na.rm= FALSE)) |>
-  dplyr::mutate(cpt = replace(cpt, is.na(cpt),0)) |>
-  dplyr::group_by(cpt) |>
-  dplyr::mutate(mean = ifelse(value == 0, 0, mean(value)), var = ifelse(value == 0, 0, var(value))) |>
-  dplyr::filter(ts >= as.POSIXct('2025-05-18 00:00:00') & ts <= as.POSIXct('2025-05-20 00:00:00')) |>
-  dplyr::ungroup()
-
-clustered |>
-  ggplot(aes(ts, value)) + geom_point() +
-  geom_step(aes(ts, mean), color='red') +
-  scale_x_datetime(
-    breaks = seq(from = min(clustered$ts), to = max(clustered$ts), by = "240 min"),
-    date_labels = "%H:%M",
-    timezone = 'Europe/London'
-  ) +
-  theme(legend.position = "none") 
-
-```
-
 ## Group data into 15 minute bins
 
 ```{r}
@@ -175,7 +132,7 @@ data <-
   dplyr::mutate(date = as.Date(ts)) 
 nrow(data)
 tail(data)
-readr::write_csv(data,'test.csv')
+saveRDS(data,'data/everon/everon_processed.rds')
 ```
 
 ## Calculate the average activity value for each bin and day
@@ -183,6 +140,7 @@ readr::write_csv(data,'test.csv')
 ```{r}
 bybin <-
   data |>
+  dplyr::filter(date >= '2025-05-01' & date <= '2025-05-07') |>
   dplyr::group_by(date, bin) |>
   dplyr::summarise(avgbin = mean(value)) |>
   dplyr::ungroup()
@@ -194,7 +152,7 @@ readr::write_csv(bybin,'bin.csv')
 
 ```{r}
 dat = data_circ(bybin$avgbin,96)
-results = pgcpt(dat, period.len=bins, minseglen.periodic=4, minseglen.global= 7*96,
+results = pgcpt(dat, period.len=bins, minseglen.periodic=4, minseglen.global= 96,
                 method.periodic="SNcirc", method.global="PELT", max.periodic.cpts=10, penalty.periodic=3*log(length(dat)),
                 penalty.global=1*log(nrow(dat)), dist="Normal mean", restrict=TRUE, circData=FALSE)
 
@@ -218,65 +176,24 @@ bybin |>
   ggplot2::geom_vline(xintercept = cpts$cpts)
 ```
 
-### Create synthetic data to demonstrate change detection
-
-### Comparison of sleep data
+### Dotplot
 
 ```{r}
 
-sleep <- readRDS('sleep.rds')
-
-sleep_start <- as.POSIXct('2025-05-13 22:00:00')
-sleep_end <- as.POSIXct('2025-05-14 7:30:00')
-
-sleep_episodes <-
-  sleep |>
-  dplyr::filter(start_time >= sleep_start & start_time <= sleep_end) |>
-  dplyr::mutate(value = as.factor(value)) |>
-  dplyr::mutate(value = forcats::fct_relevel(value, "AsleepDeep", "AsleepCore", "AsleepREM", "Awake", "Energy", "Everon"))
-
-everon_data <-
+dot_data <-
   data |>
-  dplyr::filter(ts >= sleep_start & ts <= sleep_end) |>
-  dplyr::arrange(ts) |>
-  dplyr::mutate(value = (value-min(value))/(max(value)-min(value))) |>
-  howzfunc::howzcp(seglen = 5, column = 2)
+  dplyr::filter(date >= '2025-05-01' & date <= '2025-05-07') 
 
 ggplot() +
-  geom_segment(data = sleep_episodes, aes(x = start_time, xend = end_time, y = value, yend = value), linewidth = 5) +
-  geom_segment(data = energy_episodes, aes(x = start_time, xend = end_time, y = 'Energy', yend = 'Energy', color = scaled_value, linewidth = scaled_value)) +
-  geom_line(data = everon_data, aes(x = ts, y = 'Everon', linewidth = mean)) +
-  scale_x_datetime(
-    breaks = seq(from = min(everon_data$ts), to = max(everon_data$ts), by = "60 min"),
-    date_labels = "%H:%M",
-    timezone = 'Europe/London'
-  ) +
-  theme(legend.position = "none") 
-
-```
-
-### Comparison of energy data - need to try binning and compare bins
-
-```{r}
-
-energy <- readRDS('active_energy.rds') |>
-  dplyr::mutate(duration = as.numeric(end_time - start_time)) |>
-  dplyr::mutate(energy_rate = as.numeric(value) / duration)
-
-energy_episodes <- 
-  energy |> dplyr::filter(start_time >= as.POSIXct('2025-05-13 22:00:00') & start_time <= as.POSIXct('2025-05-14 07:30:00')) |>
-  dplyr::mutate(value = as.numeric(value)) |>
-  dplyr::mutate(scaled_value = ((energy_rate - min(energy_rate))) / (max(energy_rate)- min(energy_rate)))
-
-clustered_scaled <-
-  clustered |>
-  dplyr::filter(ts >= as.POSIXct('2025-05-18 13:00:00') & ts <= as.POSIXct('2025-05-24 07:30:00')) |>
-    dplyr::mutate(scaled_value = ((mean - min(mean))) / (max(mean)- min(mean))) 
-
-ggplot() + 
-geom_segment(data = energy_episodes, aes(x = start_time, xend = end_time, y=scaled_value, yend=scaled_value), linewidth = 5, color = 'red') +  
-geom_point(data = clustered_scaled, aes(x = ts, y = scaled_value)) +
-theme(legend.position = "none")
-
+  geom_segment(
+    data = dot_data,
+    aes(
+      x = date,
+      xend = date,
+      y = bin,
+      yend = bin + lubridate::duration(15, units = "minutes"),
+      linewidth = value
+    )
+  )
 
 ```

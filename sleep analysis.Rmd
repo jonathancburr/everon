@@ -1,0 +1,115 @@
+---
+title: "Sleep Analysis"
+author: "Jonathan Burr"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+require(readr)
+require(ggplot2)
+
+threshold <- 6
+bin_size <- '5 minutes'
+
+is_night_time <- function(timestamp, night_start, night_end) {
+  time_only <- hms::as_hms(timestamp)
+
+  night_start <- hms::as_hms(night_start)
+  night_end <- hms::as_hms(night_end)
+
+  if (night_end < night_start) {
+    # Overnight case: e.g., 23:00 to 06:00
+    return(time_only >= night_start || time_only <= night_end)
+  } else {
+    # Same-day case: e.g., 20:00 to 23:00
+    return(time_only >= night_start && time_only <= night_end)
+  }
+}
+
+
+```
+
+## Read in Everon data 
+
+```{r}
+everon <-readr::read_csv2("/Users/jonathanburr/LocalRepo/Everon/data/everon/to_postgresql.csv") |>
+  dplyr::mutate(ts = as.POSIXct(datecreated, tz = 'Europe/London')) |>
+  dplyr::mutate(date = as.Date(ts)) |>
+  dplyr::mutate(night_of = as.Date(ifelse(lubridate::hour(ts) > 12, date, date-1))) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, unit = bin_size))
+```
+
+## Read in Apple data
+
+```{r}
+
+apple <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/apple_health_export/sleep_summaries.csv",
+col_types = readr::cols(start_time = col_time(format = "%H:%M:%S"),
+end_time = col_time(format = "%H:%M:%S"),
+time_asleep = col_time(format = "%H:%M:%S"),
+awake = col_time(format = "%H:%M:%S"),
+REM = col_time(format = "%H:%M:%S"),
+core = col_time(format = "%H:%M:%S"),
+deep = col_time(format = "%H:%M:%S"),
+sleep_score = col_integer())) |>
+dplyr::filter(device_id == 18262)
+
+```
+
+## Join together 
+
+```{r}
+combined <-
+apple |>
+  dplyr::select(hid, night_of, start_time, end_time) |>
+  dplyr::inner_join(everon, by = c('hid','night_of')) |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    is_night = is_night_time(ts, start_time, end_time)
+  ) |>
+  dplyr::ungroup() 
+                
+```  
+
+## Summarise
+### Using Apple boundaries
+
+``` {r}
+
+thresholded <-
+  combined |>
+  dplyr::filter(is_night) |>
+  dplyr::filter(device_id == 18258) |>
+  dplyr::group_by(hid, night_of, bin) |>
+  dplyr::summarise(value = mean(value)) |>
+  dplyr::mutate(oob = as.integer(value >= threshold)) 
+
+thresholded_sum <-
+  thresholded |>
+  dplyr::filter(night_of != '2025-05-03') |>
+  dplyr::group_by(hid, night_of) |>
+  dplyr::summarise(oob = sum(oob)) |>
+  dplyr::ungroup() |>
+  dplyr::inner_join(apple, by = c('night_of', 'hid')) 
+
+# Fit linear model
+model <- lm(howzfunc::dechour(awake) ~ oob, data = thresholded_sum)
+
+# Get R-squared
+
+thresholded_sum |>
+ggplot(aes(oob, awake)) + geom_point() + geom_label(aes(oob, awake, label = night_of),size =3) + geom_smooth(method = 'lm') +
+  labs(subtitle = summary(model)$r.squared)
+
+```
+
+## Analyse
+
+```{r}
+
+thresholded |>
+  ggplot(aes(hms::as_hms(bin), value, color = oob)) + geom_point() + facet_wrap(night_of~.)
+
+```

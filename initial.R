@@ -44,7 +44,8 @@ bybin <-
   dplyr::summarise(avgbin = mean(value), maxbin = max(value), iqrbin=IQR(value), sdbin=(sd(value))) |>
   dplyr::mutate(date = as.Date(bin)) |>
   dplyr::group_by(date) |>
-  dplyr::mutate(binnum = dplyr::row_number())
+  dplyr::mutate(binnum = dplyr::row_number()) |>
+  dplyr::arrange(date, binnum)
 nrow(bybin)
 tail(bybin)
 
@@ -66,5 +67,19 @@ bybin |>
   dplyr::group_by(binnum) |>
   dplyr::summarise(avgbin = mean(avgbin)) |>
   ggplot2::ggplot(aes(binnum, avgbin)) + geom_bar(stat='identity') +
-  ggplot2::geom_vline(xintercept = as.integer(results$pgcpt.results$Periodic_cpt[[1]]))
+  ggplot2::geom_vline(xintercept = as.integer(results$pgcpt.results$Periodic_cpt[[1]]-4))
+
+bybin |>
+  dplyr::group_by(binnum) |>
+  dplyr::summarise(mean = mean(avgbin)) |>
+  howzfunc::howzcp(seglen = 8, column = 2) |>
+  ggplot(aes(binnum, mean)) + geom_line(stat='identity')
+
+
+dat = data_circ(data$value,1440)
+results = pgcpt(dat, period.len=bins, minseglen.periodic= 240, minseglen.global= 7*1440,
+                method.periodic="SNcirc", method.global="PELT", max.periodic.cpts=360, penalty.periodic=3*log(length(dat)),
+                penalty.global=1*log(nrow(dat)), dist="Normal mean", restrict=TRUE, circData=FALSE)
+
+results$pgcpt.results$Periodic_cpt[[1]]
 

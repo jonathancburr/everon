@@ -34,18 +34,75 @@ records <- xml_find_all(doc, ".//Record[@type='HKQuantityTypeIdentifierStepCount
 steps_records <- xml_find_all(doc, ".//Record[@type='HKQuantityTypeIdentifierStepCount']")
 steps_df <- tibble(
   type = "StepCount",
-  start_time = ymd_hms(xml_attr(steps_records, "startDate")),
-  end_time = ymd_hms(xml_attr(steps_records, "endDate")),
+  startDate = xml_attr(steps_records,"startDate"),
+  endDate = xml_attr(steps_records,"endDate"),
+  start_time = ymd_hms(xml_attr(steps_records, "startDate"),tz = 'UTC'),
+  end_time = ymd_hms(xml_attr(steps_records, "endDate"),tz='UTC'),
   value = as.character(xml_attr(steps_records, "value"))
 ) |>
   dplyr::filter(start_time > start)
 
-head(steps_df)
+tail(steps_df)
 
 steps_df |>
   ggplot(aes(start_time, as.numeric(value))) + geom_point()
 
+saveRDS(steps_df, 'steps.rds')
+
 ```
+
+## Active energy
+
+```{r}
+active_energy_records <- xml_find_all(doc, ".//Record[@type='HKQuantityTypeIdentifierActiveEnergyBurned']")
+
+# Convert to tibble
+active_energy_df <- tibble(
+  type = "ActiveEnergyBurned",
+  startDate = xml_attr(active_energy_records, "startDate"),
+  endDate = xml_attr(active_energy_records, "endDate"),
+  start_time = ymd_hms(xml_attr(active_energy_records, "startDate"), tz = 'Europe/London'),
+  end_time = ymd_hms(xml_attr(active_energy_records, "endDate"), tz = 'Europe/London'),
+  value = as.numeric(xml_attr(active_energy_records, "value"))  # typically measured in kilocalories
+) |>
+  filter(start_time > start)
+
+active_energy_df |>
+  dplyr::filter(start_time >= as.POSIXct('2025-05-18') & start_time <= as.POSIXct('2025-05-23')) |>
+  ggplot(aes(start_time, as.numeric(value))) + geom_point()
+
+saveRDS(active_energy_df, 'active_energy.rds')
+
+```
+
+## Resting energy
+
+```{r}
+
+resting_energy_records <- xml_find_all(doc, ".//Record[@type='HKQuantityTypeIdentifierBasalEnergyBurned']")
+
+# Convert to tibble
+resting_energy_df <- tibble(
+  type = "BasalEnergyBurned",
+  startDate = xml_attr(resting_energy_records, "startDate"),
+  endDate = xml_attr(resting_energy_records, "endDate"),
+  start_time = ymd_hms(xml_attr(resting_energy_records, "startDate"), tz = 'Europe/London'),
+  end_time = ymd_hms(xml_attr(resting_energy_records, "endDate"), tz = 'Europe/London'),
+  value = as.numeric(xml_attr(resting_energy_records, "value"))  # typically measured in kilocalories
+) |>
+  filter(start_time > start)
+
+resting_energy_df |>
+  dplyr::filter(start_time >= as.POSIXct('2025-05-18') & start_time <= as.POSIXct('2025-05-23')) |>
+  ggplot(aes(start_time, as.numeric(value))) + geom_point()
+
+saveRDS(resting_energy_df, 'resting_energy.rds')
+
+
+```
+
+
+
 
 ## Heart Rate
 
@@ -78,11 +135,25 @@ sleep_df <- tibble(
   dplyr::mutate(value = gsub('HKCategoryValueSleepAnalysis','',value)) |>
   dplyr::filter(start_time > start)
 
-head(sleep_df)
+tail(sleep_df,30)
 
 sleep_df |>
   ggplot(aes(start_time, value)) + geom_point()
 
+sleep_df |>
+  dplyr::filter(start_time > '2025-05-13 12:00:00' & start_time < '2025-05-14 12:00:00') |>
+    ggplot(aes()) + geom_segment(aes(x = start_time, xend = end_time, y = 1, yend =1, color = value), size = 50) +
+  scale_x_datetime(
+    breaks = seq(from = min(sleep_df$start_time), to = max(sleep_df$end_time), by = "30 min"),
+    date_labels = "%H:%M",
+    timezone = 'Europe/London'
+  )
+
+sleep_df |>
+  tail()
+
+saveRDS(sleep_df, 'sleep.rds')
+max(sleep_df$end_time)
 
 ```
 
