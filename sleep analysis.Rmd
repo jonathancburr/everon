@@ -9,9 +9,13 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 require(readr)
 require(ggplot2)
+knitr::opts_chunk$set(fig.width = 10, fig.height = 5)
 
-threshold <- 6
+threshold <- 5
+roll_size <- 5
 bin_size <- '5 minutes'
+msl <- 10
+
 
 is_night_time <- function(timestamp, night_start, night_end) {
   time_only <- hms::as_hms(timestamp)
@@ -35,10 +39,31 @@ is_night_time <- function(timestamp, night_start, night_end) {
 
 ```{r}
 everon <-readr::read_csv2("/Users/jonathanburr/LocalRepo/Everon/data/everon/to_postgresql.csv") |>
+  dplyr::select(-device_id) |>
   dplyr::mutate(ts = as.POSIXct(datecreated, tz = 'Europe/London')) |>
   dplyr::mutate(date = as.Date(ts)) |>
-  dplyr::mutate(night_of = as.Date(ifelse(lubridate::hour(ts) > 12, date, date-1))) |>
-  dplyr::mutate(bin = lubridate::floor_date(ts, unit = bin_size))
+  dplyr::mutate(night_of = as.Date(ts - 43200)) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, unit = bin_size)) |>
+  dplyr::mutate(rollmean = zoo::rollmean(x= value, k = roll_size, fill = NA, align = 'right')) |>
+  dplyr::mutate(rollmedian = zoo::rollmedian(x= value, k = roll_size, fill = NA, align = 'right')) |>
+  dplyr::mutate(rollsum = zoo::rollsum(x= value, k = roll_size, fill = NA, align = 'right')) 
+
+cpts <- changepoint::cpt.mean(data = everon$value, method = 'PELT', minseglen = msl)
+
+everon$cpt[attr(cpts,'cpts')] <- TRUE
+
+everon <-
+everon |>
+  dplyr::mutate(cpt = dplyr::row_number(cpt)) |>
+  dplyr::mutate(cpt = zoo::na.locf(cpt, na.rm= FALSE)) |>
+  dplyr::mutate(cpt = replace(cpt, is.na(cpt),0)) |>
+  dplyr::group_by(cpt) |>
+  dplyr::mutate(cptmean = mean(value), cptvar = var(value))
+
+
+
+
+
 ```
 
 ## Read in Apple data
@@ -53,8 +78,7 @@ awake = col_time(format = "%H:%M:%S"),
 REM = col_time(format = "%H:%M:%S"),
 core = col_time(format = "%H:%M:%S"),
 deep = col_time(format = "%H:%M:%S"),
-sleep_score = col_integer())) |>
-dplyr::filter(device_id == 18262)
+sleep_score = col_integer())) 
 
 ```
 
@@ -63,7 +87,7 @@ dplyr::filter(device_id == 18262)
 ```{r}
 combined <-
 apple |>
-  dplyr::select(hid, night_of, start_time, end_time) |>
+  dplyr::select(hid, device_id, night_of, start_time, end_time) |>
   dplyr::inner_join(everon, by = c('hid','night_of')) |>
   dplyr::rowwise() |>
   dplyr::mutate(
@@ -73,6 +97,19 @@ apple |>
                 
 ```  
 
+## Completeness
+
+```{r}
+
+completeness <-
+combined |>
+  dplyr::filter(is_night) |>
+  dplyr::group_by(night_of, device_id) |>
+  dplyr::summarise(start = min(ts), end = max(ts), duration = as.numeric(max(ts) - min(ts))*60, readings = dplyr::n(), coverage = readings/duration) 
+
+head(completeness)
+```
+
 ## Summarise
 ### Using Apple boundaries
 
@@ -81,35 +118,124 @@ apple |>
 thresholded <-
   combined |>
   dplyr::filter(is_night) |>
-  dplyr::filter(device_id == 18258) |>
-  dplyr::group_by(hid, night_of, bin) |>
+  dplyr::group_by(hid, device_id, night_of, bin) |>
   dplyr::summarise(value = mean(value)) |>
-  dplyr::mutate(oob = as.integer(value >= threshold)) 
+  dplyr::mutate(oob = as.integer(value > threshold)) 
 
 thresholded_sum <-
   thresholded |>
-  dplyr::filter(night_of != '2025-05-03') |>
-  dplyr::group_by(hid, night_of) |>
+  #dplyr::filter(night_of != '2025-05-03') |>
+  #dplyr::filter(night_of != '2025-05-24') |>
+  dplyr::filter(night_of != '2025-05-22') |>
+  #dplyr::filter(night_of != '2025-05-21') |>
+  dplyr::group_by(hid, night_of, device_id) |>
   dplyr::summarise(oob = sum(oob)) |>
   dplyr::ungroup() |>
-  dplyr::inner_join(apple, by = c('night_of', 'hid')) 
+  dplyr::inner_join(apple, by = c('night_of', 'hid', 'device_id')) 
 
-# Fit linear model
-model <- lm(howzfunc::dechour(awake) ~ oob, data = thresholded_sum)
+# Fit linear model - Apple
+apple_model <- lm(howzfunc::dechour(awake) ~ oob, data = dplyr::filter(thresholded_sum, device_id == 18262))
+fitbit_model <- lm(howzfunc::dechour(awake) ~ oob, data = dplyr::filter(thresholded_sum, device_id == 18264))
 
 # Get R-squared
 
 thresholded_sum |>
-ggplot(aes(oob, awake)) + geom_point() + geom_label(aes(oob, awake, label = night_of),size =3) + geom_smooth(method = 'lm') +
-  labs(subtitle = summary(model)$r.squared)
+ggplot(aes(oob, awake, color=as.character(device_id))) + geom_point()  + geom_smooth(method = 'lm',se = FALSE) +
+geom_label(aes(oob, awake, label = night_of),size =3) +
+  labs(subtitle = paste('Apple:', summary(apple_model)$r.squared, 'Fitbit:',summary(fitbit_model)$r.squared))
 
 ```
 
-## Analyse
+
+## Fitbit Investigation
 
 ```{r}
 
-thresholded |>
-  ggplot(aes(hms::as_hms(bin), value, color = oob)) + geom_point() + facet_wrap(night_of~.)
+test <-
+combined |>
+  dplyr::filter(is_night) |>
+  dplyr::filter(bin >= '2025-05-22 23:00:00' & bin <= '2025-05-23 09:00:00') 
+  
+test |>  
+  ggplot(aes(ts, value, color = value > threshold)) + geom_point() +
+  geom_line(aes(ts,rollsum),color='red') +
+  labs(title = paste('rollsum', max(test$night_of)), subtitle = paste(format(min(test$ts),'%H:%M'), format(max(test$ts),'%H:%M')))
+
+test |>  
+  ggplot(aes(ts, value, color = value > threshold)) + geom_point() +
+  geom_line(aes(ts,rollmedian),color='red') +
+  labs(title = paste('rollmedian', max(test$night_of)), subtitle = paste(format(min(test$ts),'%H:%M'), format(max(test$ts),'%H:%M')))
+  
+test |>  
+  ggplot(aes(ts, value, color = value > threshold)) + geom_point() +
+  geom_line(aes(ts,cptmean),color='red') +
+  labs(title = paste('cptmean', max(test$night_of)), subtitle = paste(format(min(test$ts),'%H:%M'), format(max(test$ts),'%H:%M')))              
+
+
+
+
+
 
 ```
+
+## Find Everon start and end times
+
+```{r}
+
+nights <-
+combined |>
+  dplyr::group_by(night_of, cpt, device_id, start_time, end_time) |>
+  dplyr::summarise(everon_start = min(ts), everon_end = max(ts)) |>
+  dplyr::ungroup() |>
+  dplyr::filter(lubridate::hour(everon_start) >= 22 & lubridate::hour(everon_end) <= 9) |>
+  dplyr::mutate(wt_start_time = start_time < hms::as_hms('12:00:00')) |>
+  dplyr::mutate(wt_start_time = as.POSIXct(ifelse(wt_start_time, as.POSIXct(paste(as.character(night_of +1), as.character(start_time))),
+        as.POSIXct(paste(as.character(night_of), as.character(start_time)))))) |>   
+  dplyr::mutate(wt_end_time = as.POSIXct(paste(as.character(night_of+1), as.character(end_time)))) |>
+  dplyr::mutate(everon_length = as.numeric(everon_end - everon_start)) |>
+  dplyr::mutate(wt_length = as.numeric(wt_end_time - wt_start_time)) #|>
+  #dplyr::filter(night_of != '2025-05-12') 
+
+# Fit linear model 
+apple_model <- lm(wt_length ~ everon_length, data = dplyr::filter(nights, device_id == 18262))
+fitbit_model <- lm(wt_length ~ everon_length, data = dplyr::filter(nights, device_id == 18264))
+
+nights |>
+  ggplot(aes(everon_length, wt_length, color=as.character(device_id))) + geom_point() + geom_smooth(method = 'lm') +
+  labs(subtitle = paste('Apple:', summary(apple_model)$r.squared, 'Fitbit:',summary(fitbit_model)$r.squared)) +
+  geom_label(aes(everon_length, wt_length, label = night_of),size =3) 
+
+
+
+
+
+```
+
+### comparison
+
+```{r}
+
+ngt <- '2025-05-12'
+
+comp <-
+combined |>
+  dplyr::filter(night_of == ngt) 
+
+comp |>
+  ggplot(aes(ts,value)) + geom_point() + 
+  geom_step(aes(ts, cptmean), color='red') +
+  geom_step(aes(ts, cptvar), color='green') +  
+  geom_vline(data = dplyr::filter(nights, night_of == ngt), aes(xintercept = wt_start_time, color = as.character(device_id))) +
+  geom_vline(data = dplyr::filter(nights, night_of == ngt), aes(xintercept = wt_end_time, color = as.character(device_id)))
+
+
+
+```
+
+```{r}
+
+kmeans(x=everon$cptmean, centers = 7)
+
+```
+
+
