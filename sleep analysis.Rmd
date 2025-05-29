@@ -14,7 +14,7 @@ knitr::opts_chunk$set(fig.width = 10, fig.height = 5)
 threshold <- 5
 roll_size <- 5
 bin_size <- '5 minutes'
-msl <- 10
+msl <- 15
 
 
 is_night_time <- function(timestamp, night_start, night_end) {
@@ -32,6 +32,9 @@ is_night_time <- function(timestamp, night_start, night_end) {
   }
 }
 
+relative_dechour <- function(dechour) {
+  ifelse(dechour > 12, dechour - 24, dechour)
+}
 
 ```
 
@@ -39,7 +42,8 @@ is_night_time <- function(timestamp, night_start, night_end) {
 
 ```{r}
 everon <-readr::read_csv2("/Users/jonathanburr/LocalRepo/Everon/data/everon/to_postgresql.csv") |>
-  dplyr::select(-device_id) |>
+  dplyr::filter(device_id == 18258) |>
+  dplyr::rename(ev_device_id = device_id) |>
   dplyr::mutate(ts = as.POSIXct(datecreated, tz = 'Europe/London')) |>
   dplyr::mutate(date = as.Date(ts)) |>
   dplyr::mutate(night_of = as.Date(ts - 43200)) |>
@@ -47,6 +51,14 @@ everon <-readr::read_csv2("/Users/jonathanburr/LocalRepo/Everon/data/everon/to_p
   dplyr::mutate(rollmean = zoo::rollmean(x= value, k = roll_size, fill = NA, align = 'right')) |>
   dplyr::mutate(rollmedian = zoo::rollmedian(x= value, k = roll_size, fill = NA, align = 'right')) |>
   dplyr::mutate(rollsum = zoo::rollsum(x= value, k = roll_size, fill = NA, align = 'right')) 
+
+# full_time <- data.frame(ts = seq(min(everon$ts), max(everon$ts)-60, by = "1 min")) 
+
+# everon <-
+# everon |>
+#  dplyr::select(ts, value) |>
+# dplyr::right_join(full_time, by = 'ts') |>
+#  dplyr::arrange(ts)
 
 cpts <- changepoint::cpt.mean(data = everon$value, method = 'PELT', minseglen = msl)
 
@@ -66,19 +78,20 @@ everon |>
 
 ```
 
-## Read in Apple data
+## Read in watch data
 
 ```{r}
 
-apple <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/apple_health_export/sleep_summaries.csv",
-col_types = readr::cols(start_time = col_time(format = "%H:%M:%S"),
-end_time = col_time(format = "%H:%M:%S"),
-time_asleep = col_time(format = "%H:%M:%S"),
-awake = col_time(format = "%H:%M:%S"),
-REM = col_time(format = "%H:%M:%S"),
-core = col_time(format = "%H:%M:%S"),
-deep = col_time(format = "%H:%M:%S"),
-sleep_score = col_integer())) 
+watch <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/apple_health_export/sleep_summaries.csv",
+  col_types = readr::cols(start_time = col_time(format = "%H:%M:%S"),
+  end_time = col_time(format = "%H:%M:%S"),
+  time_asleep = col_time(format = "%H:%M:%S"),
+  awake = col_time(format = "%H:%M:%S"),
+  REM = col_time(format = "%H:%M:%S"),
+  core = col_time(format = "%H:%M:%S"),
+  deep = col_time(format = "%H:%M:%S"),
+  sleep_score = col_integer())) |>
+  dplyr::rename(wt_device_id = device_id)  
 
 ```
 
@@ -86,9 +99,12 @@ sleep_score = col_integer()))
 
 ```{r}
 combined <-
-apple |>
-  dplyr::select(hid, device_id, night_of, start_time, end_time) |>
-  dplyr::inner_join(everon, by = c('hid','night_of')) |>
+  watch |>
+  dplyr::select(hid, wt_device_id, night_of, start_time, end_time) |>
+  dplyr::inner_join(everon, by = c('hid','night_of')) 
+
+combined <-
+  combined |>
   dplyr::rowwise() |>
   dplyr::mutate(
     is_night = is_night_time(ts, start_time, end_time)
@@ -104,47 +120,108 @@ apple |>
 completeness <-
 combined |>
   dplyr::filter(is_night) |>
-  dplyr::group_by(night_of, device_id) |>
+  dplyr::group_by(night_of, wt_device_id) |>
   dplyr::summarise(start = min(ts), end = max(ts), duration = as.numeric(max(ts) - min(ts))*60, readings = dplyr::n(), coverage = readings/duration) 
 
 head(completeness)
 ```
 
 ## Summarise
-### Using Apple boundaries
+### Using device boundaries
 
 ``` {r}
 
 thresholded <-
   combined |>
   dplyr::filter(is_night) |>
-  dplyr::group_by(hid, device_id, night_of, bin) |>
+  dplyr::group_by(hid, wt_device_id, night_of, bin) |>
   dplyr::summarise(value = mean(value)) |>
   dplyr::mutate(oob = as.integer(value > threshold)) 
 
 thresholded_sum <-
   thresholded |>
-  #dplyr::filter(night_of != '2025-05-03') |>
-  #dplyr::filter(night_of != '2025-05-24') |>
-  dplyr::filter(night_of != '2025-05-22') |>
-  #dplyr::filter(night_of != '2025-05-21') |>
-  dplyr::group_by(hid, night_of, device_id) |>
+  #dplyr::filter(night_of != '2025-05-27') |>
+  #dplyr::filter(night_of != '2025-05-23') |>
+  #dplyr::filter(night_of != '2025-05-22') |>
+  #dplyr::filter(night_of != '2025-05-14') |>
+  dplyr::group_by(hid, night_of, wt_device_id) |>
   dplyr::summarise(oob = sum(oob)) |>
   dplyr::ungroup() |>
-  dplyr::inner_join(apple, by = c('night_of', 'hid', 'device_id')) 
+  dplyr::inner_join(watch, by = c('night_of', 'hid', 'wt_device_id')) 
 
-# Fit linear model - Apple
-apple_model <- lm(howzfunc::dechour(awake) ~ oob, data = dplyr::filter(thresholded_sum, device_id == 18262))
-fitbit_model <- lm(howzfunc::dechour(awake) ~ oob, data = dplyr::filter(thresholded_sum, device_id == 18264))
+# Fit linear model 
+apple_model <- lm(howzfunc::dechour(awake) ~ oob, data = dplyr::filter(thresholded_sum, wt_device_id == 18262))
+fitbit_model <- lm(howzfunc::dechour(awake) ~ oob, data = dplyr::filter(thresholded_sum, wt_device_id == 18264))
 
 # Get R-squared
 
 thresholded_sum |>
-ggplot(aes(oob, awake, color=as.character(device_id))) + geom_point()  + geom_smooth(method = 'lm',se = FALSE) +
-geom_label(aes(oob, awake, label = night_of),size =3) +
+ggplot(aes(oob, awake, color=as.character(wt_device_id))) + geom_point()  + geom_smooth(method = 'lm',se = FALSE) +
+geom_label(aes(oob, awake, label = night_of),size =3) + facet_wrap(wt_device_id~., scales = 'free_y') +
   labs(subtitle = paste('Apple:', summary(apple_model)$r.squared, 'Fitbit:',summary(fitbit_model)$r.squared))
 
 ```
+
+## Devices against each other
+
+```{r}
+
+apple_only <-
+watch |>
+  dplyr::filter(wt_device_id == 18262)
+
+fitbit_only <-
+watch |>
+  dplyr::filter(wt_device_id == 18264)
+
+both_devices <-
+  apple_only |>
+  dplyr::inner_join(fitbit_only, by = 'night_of') |>
+  dplyr::mutate(dplyr::across(dplyr::where(hms::is.hms), howzfunc::dechour)) |>
+  dplyr::mutate(dplyr::across(dplyr::matches("start_time|end_time"), relative_dechour)) |>
+  dplyr::mutate(length.x = end_time.x - start_time.x) |>
+  dplyr::mutate(length.y = end_time.y - start_time.y) |>
+  dplyr::mutate(awake_prop.x = awake.x/length.x) |>
+  dplyr::mutate(awake_prop.y = awake.y/length.y)   
+
+start_model <- lm(start_time.x ~ start_time.y, data = both_devices)
+both_devices |>
+  ggplot(aes(start_time.x, start_time.y)) + 
+  geom_point() + 
+  geom_smooth(method = 'lm', se = FALSE) +
+  labs(subtitle = paste('R^2:', summary(start_model)$r.squared)) 
+
+end_model <- lm(end_time.x ~ end_time.y, data = both_devices)
+both_devices |>
+  ggplot(aes(end_time.x, end_time.y)) +
+  geom_point() + 
+  geom_smooth(method = 'lm', se = FALSE) +
+  labs(subtitle = paste('R^2:', summary(end_model)$r.squared)) +
+  geom_label(aes(end_time.x, end_time.y, label = night_of),size =3)
+
+length_model <- lm(length.x ~ length.y, data = both_devices)
+both_devices |>
+  ggplot(aes(length.x, length.y)) + 
+  geom_point() + 
+  geom_smooth(method = 'lm', se = FALSE) +
+  labs(subtitle = paste('R^2:', summary(length_model)$r.squared)) + geom_label(aes(length.x, length.y, label = night_of),size =3)
+
+awake_prop_model <- lm(awake_prop.x ~ awake_prop.y, data = both_devices)
+both_devices |>
+  ggplot(aes(awake_prop.x, awake_prop.y)) + 
+  geom_point() + 
+  geom_smooth(method = 'lm', se = FALSE) +
+  labs(subtitle = paste('R^2:', summary(awake_prop_model)$r.squared)) + geom_label(aes(awake_prop.x, awake_prop.y, label = night_of),size =3)
+
+
+```
+
+
+```
+
+
+
+
 
 
 ## Fitbit Investigation
@@ -154,7 +231,7 @@ geom_label(aes(oob, awake, label = night_of),size =3) +
 test <-
 combined |>
   dplyr::filter(is_night) |>
-  dplyr::filter(bin >= '2025-05-22 23:00:00' & bin <= '2025-05-23 09:00:00') 
+  dplyr::filter(bin >= '2025-05-27 21:00:00' & bin <= '2025-05-28 09:00:00') 
   
 test |>  
   ggplot(aes(ts, value, color = value > threshold)) + geom_point() +
@@ -171,71 +248,5 @@ test |>
   geom_line(aes(ts,cptmean),color='red') +
   labs(title = paste('cptmean', max(test$night_of)), subtitle = paste(format(min(test$ts),'%H:%M'), format(max(test$ts),'%H:%M')))              
 
-
-
-
-
-
 ```
-
-## Find Everon start and end times
-
-```{r}
-
-nights <-
-combined |>
-  dplyr::group_by(night_of, cpt, device_id, start_time, end_time) |>
-  dplyr::summarise(everon_start = min(ts), everon_end = max(ts)) |>
-  dplyr::ungroup() |>
-  dplyr::filter(lubridate::hour(everon_start) >= 22 & lubridate::hour(everon_end) <= 9) |>
-  dplyr::mutate(wt_start_time = start_time < hms::as_hms('12:00:00')) |>
-  dplyr::mutate(wt_start_time = as.POSIXct(ifelse(wt_start_time, as.POSIXct(paste(as.character(night_of +1), as.character(start_time))),
-        as.POSIXct(paste(as.character(night_of), as.character(start_time)))))) |>   
-  dplyr::mutate(wt_end_time = as.POSIXct(paste(as.character(night_of+1), as.character(end_time)))) |>
-  dplyr::mutate(everon_length = as.numeric(everon_end - everon_start)) |>
-  dplyr::mutate(wt_length = as.numeric(wt_end_time - wt_start_time)) #|>
-  #dplyr::filter(night_of != '2025-05-12') 
-
-# Fit linear model 
-apple_model <- lm(wt_length ~ everon_length, data = dplyr::filter(nights, device_id == 18262))
-fitbit_model <- lm(wt_length ~ everon_length, data = dplyr::filter(nights, device_id == 18264))
-
-nights |>
-  ggplot(aes(everon_length, wt_length, color=as.character(device_id))) + geom_point() + geom_smooth(method = 'lm') +
-  labs(subtitle = paste('Apple:', summary(apple_model)$r.squared, 'Fitbit:',summary(fitbit_model)$r.squared)) +
-  geom_label(aes(everon_length, wt_length, label = night_of),size =3) 
-
-
-
-
-
-```
-
-### comparison
-
-```{r}
-
-ngt <- '2025-05-12'
-
-comp <-
-combined |>
-  dplyr::filter(night_of == ngt) 
-
-comp |>
-  ggplot(aes(ts,value)) + geom_point() + 
-  geom_step(aes(ts, cptmean), color='red') +
-  geom_step(aes(ts, cptvar), color='green') +  
-  geom_vline(data = dplyr::filter(nights, night_of == ngt), aes(xintercept = wt_start_time, color = as.character(device_id))) +
-  geom_vline(data = dplyr::filter(nights, night_of == ngt), aes(xintercept = wt_end_time, color = as.character(device_id)))
-
-
-
-```
-
-```{r}
-
-kmeans(x=everon$cptmean, centers = 7)
-
-```
-
 
