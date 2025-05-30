@@ -4,6 +4,7 @@ generate_combinations <- function(x) {
   
   # Recursive helper
   recurse <- function(start, parts) {
+    print(start)
     if (start > n) {
       results[[length(results) + 1]] <<- parts
       return()
@@ -20,8 +21,8 @@ generate_combinations <- function(x) {
 }
 
 # Example usage:
-segments <- c("a", "b", "c", "d")
-combinations <- generate_combinations(segments)
+testsegments <- test$cpt
+combinations <- generate_combinations(testsegments)
 
 # Display all combinations
 for (combo in combinations) {

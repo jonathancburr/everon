@@ -13,7 +13,7 @@ knitr::opts_chunk$set(fig.width = 10, fig.height = 5)
 
 threshold <- 1
 roll_size <- 5
-bin_size <- '15 minutes'
+bin_size <- '5 minutes'
 msl <- 15
 
 
@@ -40,7 +40,6 @@ relative_dechour <- function(dechour) {
 
 
 ## Objective
-Overall routine detection
 Quantity of rest
 Quality of rest
 
@@ -50,21 +49,7 @@ Quality of rest
 everon <-readr::read_csv2("/Users/jonathanburr/LocalRepo/Everon/data/everon/to_postgresql.csv") |>
   dplyr::filter(device_id == 18258) |>
   dplyr::rename(ev_device_id = device_id) |>
-  dplyr::mutate(ts = as.POSIXct(datecreated, tz = 'Europe/London')) |>
-  dplyr::mutate(lnvalue = log(value+1))
-
-cpts <- changepoint::cpt.meanvar(data = everon$lnvalue, method = 'PELT', minseglen = msl)
-
-everon$cpt[attr(cpts,'cpts')] <- TRUE
-
-everon <-
-everon |>
-  dplyr::mutate(cpt = dplyr::row_number(cpt)) |>
-  dplyr::mutate(cpt = zoo::na.locf(cpt, na.rm= FALSE)) |>
-  dplyr::mutate(cpt = replace(cpt, is.na(cpt),0)) |>
-  dplyr::group_by(cpt) |>
-  dplyr::mutate(cptmean = mean(value), cptsd = sd(value)) |>
-  dplyr::ungroup()
+  dplyr::mutate(ts = as.POSIXct(datecreated, tz = 'Europe/London')) 
 
 full_time <- data.frame(ts = seq(min(everon$ts), max(everon$ts)-60, by = "1 min")) 
 
@@ -74,13 +59,34 @@ everon <-
   dplyr::mutate(filled = is.na(value)) |>  
   dplyr::arrange(ts) |>
   dplyr::mutate(value = ifelse(is.na(value), 1, value)) |>
-  dplyr::select(-datecreated) 
+  dplyr::mutate(hid = zoo::na.locf(hid), ev_device_id = zoo::na.locf(ev_device_id)) |>
+  dplyr::select(-datecreated) |>
+  dplyr::mutate(value = log(value+1))
 
 everon <-
   everon |>
   dplyr::mutate(date = as.Date(ts)) |>
-  dplyr::mutate(night_of = as.Date(ts - 43200, tz = 'Europe/London')) |>
-  dplyr::mutate(dechour = relative_dechour(howzfunc::dechour(ts))) 
+  dplyr::mutate(night_of = as.Date(ts - 43200)) |>
+  dplyr::mutate(bin = lubridate::floor_date(ts, unit = bin_size)) |>
+  dplyr::mutate(rollmean = zoo::rollmean(x= value, k = roll_size, fill = NA, align = 'right')) |>
+  dplyr::mutate(rollmedian = zoo::rollmedian(x= value, k = roll_size, fill = NA, align = 'right')) |>
+  dplyr::mutate(rollsum = zoo::rollsum(x= value, k = roll_size, fill = NA, align = 'right')) |>
+  dplyr::mutate(dechour = relative_dechour(howzfunc::dechour(ts)))
+
+cpts <- changepoint::cpt.mean(data = na.omit(everon$value), method = 'PELT', minseglen = msl)
+
+everon$cpt[attr(cpts,'cpts')] <- TRUE
+
+everon <-
+everon |>
+  dplyr::mutate(cpt = dplyr::row_number(cpt)) |>
+  dplyr::mutate(cpt = zoo::na.locf(cpt, na.rm= FALSE)) |>
+  dplyr::mutate(cpt = replace(cpt, is.na(cpt),0)) |>
+  dplyr::group_by(cpt) |>
+  dplyr::mutate(cptmean = mean(value), cptvar = var(value))
+
+
+
 
 
 ```
@@ -99,11 +105,7 @@ watch <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/apple_health
   deep = col_time(format = "%H:%M:%S"),
   sleep_score = col_integer())) |>
   dplyr::rename(wt_device_id = device_id) |>
-  dplyr::filter(night_of != '2025-04-29') |>
-  dplyr::mutate(across(start_time:deep, ~ howzfunc::dechour(.))) |>
-  dplyr::mutate(across(start_time:end_time, ~ relative_dechour(.))) |>
-  dplyr::mutate(length = end_time - start_time) |>
-  dplyr::mutate(awake_prop = awake/length)
+  dplyr::filter(night_of != '2025-04-29')
 
 ```
 
@@ -112,19 +114,8 @@ watch <- readr::read_csv("/Users/jonathanburr/LocalRepo/Everon/data/apple_health
 ```{r}
 
 measured_nights <- unique(watch$night_of)
-print(measured_nights)
-
-selected_nights <-
-everon |>
-  dplyr::filter(night_of %in% measured_nights) 
-
-selected_nights |>
-  ggplot(aes(dechour,as.character(night_of),size=log(value+1))) + geom_point(alpha =0.2) 
 
 ```
-
-
-
 
 
 ### Correct 
@@ -135,180 +126,39 @@ Uses kmeans to find not being worn segment and then changes the data
 
 ```{r}
 
-clustered_data <-
-  selected_nights |>
-  dplyr::group_by(cptmean, cptsd) |>
-  dplyr::summarise() |>
+selected_nights <-
+everon |>
   dplyr::ungroup() |>
+  dplyr::filter(night_of %in% measured_nights) |>
   na.omit()
 
-k_model <- kmeans(x = dplyr::select(clustered_data, cptmean, cptsd), centers = 3)
-k_centers <- data.frame(k_model$centers) |>
-  dplyr::mutate(cluster = dplyr::row_number()) |>
-  dplyr::mutate(rank = dplyr::row_number(cptmean))
-
-clustered_data$cluster <- k_model$cluster
-
-selected_nights <-
-  selected_nights |>
-  dplyr::inner_join(clustered_data, by = c('cptmean', 'cptsd')) |>
-  dplyr::inner_join(dplyr::select(k_centers, cluster, rank), by = 'cluster')
+k_model <- kmeans(x = dplyr::select(selected_nights, cptmean, cptvar), centers = 3)
+selected_nights$cluster <- k_model$cluster
 
 selected_nights |>
   ggplot(aes(dechour,value)) + 
   geom_point() +
   geom_step(aes(dechour, cptmean), color='red') +
   facet_wrap(night_of~.)
+  
+segments <-
+  selected_nights |>
+  dplyr::group_by(night_of, cpt) |>
+  dplyr::summarise(start = min(dechour), end = max(dechour), cluster = mean(cluster))
 
 selected_nights |>
   ggplot() +
   #geom_point(aes(dechour, as.character(night_of), size = value)) +
-  geom_point(aes(dechour, as.character(night_of),color=as.factor(cluster))) +
+  geom_segment(data=segments, aes(x=start, xend = end, y=as.character(night_of), yend=as.character(night_of),color=as.factor(cluster)), size = 5) +
   xlim(-3,9)
   
-selected_nights |>
-  dplyr::filter(night_of == '2025-05-25') |>
-  ggplot()+
-  geom_point(aes(ts, value, color = as.factor(cluster))) +
-  geom_step(aes(ts, cptmean))
-
-```
-
-## PGCirc 
-
-```{r}
-
-adj_unworn <-
-  selected_nights |>
-  dplyr::select(night_of, ts, value, lnvalue, rank) |>
-  dplyr::mutate(value = ifelse(rank == 1, 35,value)) 
-  
-adj_unworn_binned <-
-  adj_unworn |>
-  dplyr::mutate(bin = lubridate::floor_date(ts, unit = bin_size)) |>
-  dplyr::group_by(bin) |>
-  dplyr::summarise(mean = mean(value), sd=sd(value)) |>
-  dplyr::mutate(active = as.integer((mean > 5))) |>
-  dplyr::ungroup() 
-
-if(1==0){
-dat = PGCirc::data_circ(adj_unworn_binned$mean,96)
-results = PGCirc::pgcpt(dat, period.len=96, minseglen.periodic=4, minseglen.global= 7*96,
-                method.periodic="SNcirc", method.global="PELT", max.periodic.cpts=10, penalty.periodic=3*log(length(dat)),
-                penalty.global=1*log(nrow(dat)), dist="Normal mean", restrict=TRUE, circData=TRUE)
-}
-
-if(1==0){
-dat = PGCirc::data_circ(adj_unworn_binned$active,96)
-results = PGCirc::pgcpt(dat, period.len=96, minseglen.periodic=4, minseglen.global= 7*96,
-                method.periodic="SNcirc", method.global="PELT", max.periodic.cpts=10, penalty.periodic=3*log(length(dat)),
-                penalty.global=1*log(nrow(dat)), dist="Bernoulli", restrict=TRUE, circData=FALSE)
-}
-
-if(FALSE){
-length(dat)
-tail(dat)
-results$pgcpt.results$Periodic_cpt[[1]]
-
-everon_binned |>
-  dplyr::mutate(bin = hms::as_hms(bin)) |>
-  dplyr::group_by(bin) |>
-  dplyr::summarise(mean = mean(mean)) |>
-  ggplot(aes(bin, mean)) + geom_bar(stat='identity')
-
-data.frame(r = as.POSIXct((results$pgcpt.results$Periodic_cpt[[1]]-1) * 900))
-}
-
-# assumed values
-night_start_prior <- -1
-night_end_prior <- 7
-
-
-```
-
-### Sleep stats using average start and end from PGCirc
-
-```{r}
-everon_pgcirc <-
-everon |>
-  dplyr::select(night_of, ts, dechour, value, filled) |>
-  dplyr::filter(dechour >= night_start_prior) |>
-  dplyr::filter(dechour < night_end_prior) |>
-  dplyr::mutate(oob = !is.na(value) & as.integer(value >= 15)) 
-  
-everon_pgcirc_stats <-  
-  everon_pgcirc |>
-  dplyr::group_by(night_of) |>
-  dplyr::summarise(start_time = min(dechour), end_time = max(dechour), awake = sum(oob)/60, length = end_time - start_time, length_recorded = sum(!filled)/60) |>
-  dplyr::mutate(awake_prop = awake/length, awake_prop_recorded = awake/length_recorded)
-```
-
-## Compare sleep stats from both sources
-
-```{r}
-
-comparison <-
-  everon_pgcirc_stats |>
-  #dplyr::filter(night_of != '2025-05-27') |>
-  dplyr::inner_join(watch, by = 'night_of')
-  
-apple_model <- lm(awake_prop.x ~ awake_prop.y, data = dplyr::filter(comparison, wt_device_id == 18262))
-fitbit_model <- lm(awake_prop.x ~ awake_prop.y, data = dplyr::filter(comparison, wt_device_id == 18264))
-comparison |>
-ggplot(aes(awake_prop.x, awake_prop.y, color=wt_device_id, group=wt_device_id)) + geom_point() +
-  geom_smooth(method = 'lm') +
-  labs(subtitle = paste('Apple:', summary(apple_model)$r.squared, 'Fitbit:',summary(fitbit_model)$r.squared))+
-  theme(legend.position="none")
-
-apple_model <- lm(awake_prop_recorded ~ awake_prop.y, data = dplyr::filter(comparison, wt_device_id == 18262))
-fitbit_model <- lm(awake_prop_recorded ~ awake_prop.y, data = dplyr::filter(comparison, wt_device_id == 18264))
-
-comparison |>
-ggplot(aes(awake_prop_recorded, awake_prop.y, color=wt_device_id, group=wt_device_id)) + geom_point() +
-  geom_smooth(method = 'lm') +
-  geom_label(aes(awake_prop_recorded, awake_prop.y, label = night_of),size =3) +
-  labs(subtitle = paste('Apple:', summary(apple_model)$r.squared, 'Fitbit:',summary(fitbit_model)$r.squared)) +
-  theme(legend.position="none")
-
-comparison |>
-  dplyr::select(-hid, -sleep_score) |>
-  dplyr::group_by(wt_device_id) |>
-  dplyr::summarise(across(everything(), ~mean(.)))
-
 
 
 ```
 
 
-### Find daily night start and night ends using PGCircs as prior
-
-```{r}
 
 
-cpts <- changepoint::cpt.mean(data = adj_unworn$value, method = 'PELT', minseglen = 15)
-
-adj_unworn$cpt[attr(cpts,'cpts')] <- TRUE
-
-adj_unworn <-
-adj_unworn |>
-  dplyr::arrange(ts) |>
-  dplyr::mutate(cpt = dplyr::row_number(cpt)) |>
-  dplyr::mutate(cpt = zoo::na.locf(cpt, na.rm= FALSE)) |>
-  dplyr::mutate(cpt = replace(cpt, is.na(cpt),0)) |>
-  dplyr::group_by(cpt) |>
-  dplyr::mutate(cptmean = mean(value), cptsd = sd(value)) |>
-  dplyr::ungroup() |>
-  dplyr::mutate(rollmean = zoo::rollmean(cptmean, 60, fill=NA, align = 'right')) |>
-  dplyr::mutate(rollmedian = zoo::rollmedian(cptmean, 59, fill=NA, align = 'right'))
-  
-adj_unworn |>
-  dplyr::filter(night_of == '2025-05-27') |>
-  ggplot(aes(ts, value)) + geom_point() + 
-  geom_step(aes(ts, cptmean), color = 'red') +
-  geom_line(aes(ts, rollmedian), color='red', linetype='dashed')
-
-
-```
 
 ## Join together 
 
@@ -440,13 +290,11 @@ both_devices |>
 ```
 
 
-
-```{r} 
-test <-
-everon |>
-dplyr::filter(night_of == '2025-05-28')
-
 ```
+
+
+
+
 
 
 ## Fitbit Investigation
